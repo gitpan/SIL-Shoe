@@ -1,0 +1,56 @@
+=head1 Title
+
+Shoebox Utilities
+
+=head1 Introduction
+
+=head1 Programs
+
+=head1 Encoding Conversion
+
+Various of the utilities allow the conversion of data too or from Unicode. The 
+basic principle of data conversion is that the byte encoding is given a name and 
+this is used to look up a mechanism for converting too or from Unicode.
+
+There are a number of different ways of converting data: system codepages, 
+internal Perl encodings, TECkit, etc. What would be nice is if there were one 
+place to look that would tell how to convert from a given encoding to Unicode.
+
+For this system, we use a thing called the I<Encoding Registry> which is an XML 
+file containing information about encodings and how they are converted; fonts 
+and how they relate to encodings and how the various mappings are implemented. 
+For the most part, you as a user don't need to know anything about the specifics 
+of the XML format, but you will need to interact with the encoding registry 
+using tools.
+
+One important tool is C<encrem> the encoding registry manager. It is a command 
+line tool that allows you to enter multiple commands into one session (or to 
+even pipe those commands from a text file to do automatic installation, etc.).
+
+C<encrem> looks in the registry for the encoding registry and if it can't find 
+it will use one you specify on the command line:
+
+    encrem -r possibly_new.xml
+    
+It then tells you which file it is actually using (whether it found it in the 
+system registry or is using the one you specify). If you are sure you have an 
+existing encoding registry, you don't need to use the C<-r> option to C<encrem>. 
+The next step is to possibly add an empty template to the registry ready for 
+adding new encodings and mappings and then to register that file with the system 
+registry:
+
+    encrem -r possibly_new.xml
+    encrem: create
+    encrem: register
+    encrem: exit
+    
+Notice the different command lines. You can get help at any time by typing a 
+command name followed by C<help> or simply C<help> to get a short list of 
+commands.
+
+Now that we are sure we have an encoding registry file, we can start adding 
+information to it:
+
+    encrem
+    encrem: add-encoding 
+
