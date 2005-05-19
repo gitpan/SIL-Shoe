@@ -25,7 +25,9 @@ The following methods are available:
 
 =cut
 
-$VERSION = "1.05";      # MJPH  10-JUN-2005     Add md5 and line counts on indexing
+$VERSION = "1.07";      # MJPH  21-FEB-2005     Add \_DateStampHasFourDigitYear field (' DateStamp' = 4)
+# $VERSION = "1.06";      # MJPH  20-JAN-2005     Fix multiline key fields
+# $VERSION = "1.05";      # MJPH  10-JUN-2004     Add md5 and line counts on indexing
 # $VERSION = "1.04";      # MJPH   3-APR-2003     Add auto key searching, md5, locational reading
 # $VERSION = "1.0003";    # MJPH   9-DEC-1998     Add noblank creation option.
 # $VERSION = "1.0000";
@@ -104,7 +106,9 @@ sub new
             last if $key;
         }
         elsif (m/^\\_DateStampHasFourDigitYear/o)
-        { }
+        {
+            $self->{' DateStamp'} = 4;
+        }
         elsif (m/^\\(\S+)/oi)
         { 
             $self->{' key'} = $1 unless $key;
@@ -400,7 +404,7 @@ sub readrecord
     return undef unless $foundkey;          # didn't find a key so return nothing
 
 # read fields until find next key found
-    undef $current_key;     # in nomans land, between key and first field
+    $current_key = $key;    # in nomans land, between key and first field
     $loc = $file->tell;     # get current location so can return here if
                             # find a new key.
     while($_ = $file->getline)

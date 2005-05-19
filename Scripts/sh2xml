@@ -1,16 +1,20 @@
+#!/usr/bin/perl
 # sh2xml_l.pl
 # This is about as good as I can do without any more information. Any suggestions
 # for where to go from here. Someone could take the output from this automated
 # solution and use XSLT to re-organise according to a different DTD.
 
-$VERSION = '1.0.3'; #   MJPH     8-JUN-2004     Add charset support
+$VERSION = '1.0.4'; #   MJPH    22-APR-2005     Fix Unicode fonts in -f and handling unicode text
+# $VERSION = '1.0.3'; #   MJPH     8-JUN-2004     Add charset support
 # $VERSION = '1.0.2'; #   MJPH    15-MAR-2003     Convert font names via system codepage
 # $VERSION = '1.0.1'; #   MJPH     5-MAR-2003     Add system codepage support
 # $VERSION = '1.0';   #   MJPH     9-MAY-2003     Add Unicode support for Toolbox
 
 use SIL::Shoe::Settings;
 use SIL::Shoe::Data;
+use Encode qw(_utf8_on);
 use Encode::Registry;
+use File::Spec;
 use Getopt::Std;
 
 getopts("a:c:d:e:fis:x:");
@@ -138,12 +142,15 @@ if ($opt_f)
     foreach $m (sort keys %{$typef->{'mkr'}})
     {
         my ($fntmkr, $italic, $bold, $color);
-        $mkr = $typef->{'mkr'}{$m};
+        my ($mkr) = $typef->{'mkr'}{$m};
+        my ($enc, $cp) = get_enc($m, $settings, $typef, $defenc, $opt_s);
+        my ($fname);
+        
         print "  <marker name=\"$dtd->{$m}{'element'}\"";
         print " style=\"" . (defined $mkr->{'CharStyle'} ? 'char' : 'par') . "\"";
         print ">\n";
         print "    <language>$mkr->{'lng'}</language>\n";
-        if (defined $mkr->{'fnt'})
+         if (defined $mkr->{'fnt'})
         { $fntmkr = $mkr->{'fnt'}; }
         else
         { $fntmkr = $settings->lang($mkr->{'lng'}); }
@@ -156,7 +163,15 @@ if ($opt_f)
         print "    <font size=\"$fntmkr->{'Size'}\"";
         print " style=\"$bold$italic\"" if ($bold || $italic);
         print " color=\"$color\"" if ($color);
-        print ">" . protect($defenc->decode($fntmkr->{'Name'})) . "</font>\n";
+        $fname = $fntmkr->{'Name'};
+        my ($nfname);
+        $fntmkr->add_specials;
+        if (!defined $mkr->{'fnt'} && defined $fntmkr->{'unicode_font'})
+        { $nfname = $fntmkr->{'unicode_font'}; }
+        elsif ($cp)
+        { $nfname = Encode::Registry::find_encfont($cp, $fname); }
+        $fname = $nfname if ($nfname);
+        print ">" . protect($defenc->decode($fname)) . "</font>\n";
 
         if (defined $dtd->{$m}{'interlinid'})
         { print "    <interlinear level=\"" . ($dtd->{$m}{'interlinid'} + 1) . "\"/>\n"; }
@@ -204,28 +219,12 @@ while ($s->readrecord(\@fields))
             print "</interlinear-block>\n";
             undef $interlin_level;
         }
-                
-        unless ($lang = $settings->lang($typef->{'mkr'}{$marker}{'lng'}))
-        { $enc = $defenc; }
-        elsif (defined $lang->{'encoding'})
-        { $enc = $lang->{'encoding'}; }
-        elsif (defined $lang->{'UnicodeLang'})
-        { undef $enc; }
-        else
-        {
-            my ($cp);
-            $lang->add_specials;
-            $cp = $lang->{'codepage'} || $charsets{hex($lang->{'charset'})};
-            $enc = Encode::Registry::find_encoding($cp);
-            if (!$enc && $cp)
-            {
-                print STDERR "Unable to find encoding $cp, using default\n";
-                $enc = $defenc;
-            }
-            $lang->{'encoding'} = $enc;
-        }
+        ($enc, $cp) = get_enc($marker, $settings, $typef, $defenc, $opt_s);        
 
-        $s->{$f} = $enc->decode($s->{$f}) if ($enc);
+        if ($enc)
+        { $s->{$f} = $enc->decode($s->{$f}); }
+        else
+        { _utf8_on($s->{$f}); }
         $s->{$f} =~ s/([<>&'"])/$esc{$1}/og;    # tidy up data]
 
         if (defined $dtd->{$marker}{'parent'})
@@ -424,6 +423,49 @@ sub protect
     
     $str =~  s/([<>&'"])/$esc{$1}/og;    # tidy up data]
     $str;
+}
+
+sub get_enc
+{
+    my ($marker, $settings, $typef, $defenc, $base) = @_;
+    my ($res, $enc);
+    
+    unless ($lang = $settings->lang($typef->{'mkr'}{$marker}{'lng'}))
+    { $enc = $defenc; }
+    elsif (defined $lang->{'encoding'})
+    { $enc = $lang->{'encoding'}; }
+    elsif (defined $lang->{'UnicodeLang'})
+    { undef $enc; }
+    else
+    {
+        my ($cp);
+        $lang->add_specials;
+        $cp = $lang->{'codepage'};
+        if ($cp eq 'none')
+        { $enc = undef; }
+        elsif ($cp =~ /\.tec$/o)
+        {
+            $enc = Encode::TECkit->new(File::Spec->catfile($base, $cp));
+            unless ($enc)
+            {
+                print STDERR "Unable to find TECkit mapping $cp, using default encoding\n";
+                $enc = $defenc;
+            }
+        }
+        else
+        {
+            $cp ||= $charsets{hex($lang->{'charset'})};
+            $enc = Encode::Registry::find_encoding($cp);
+            $res = $cp;
+              if (!$enc && $cp)
+            {
+                print STDERR "Unable to find encoding $cp, using default\n";
+                $enc = $defenc;
+            }
+        }
+        $lang->{'encoding'} = $enc;
+    }
+    ($enc, $res);
 }
 
 sub build_pos
@@ -631,24 +673,19 @@ sub remove_links
 sub stack_xml
 {
     my ($first, $ind, $dtd, $indent) = @_;
-    my ($mk, $enc, $str, $lang, $c, $child);
+    my ($mk, $enc, $str, $lang, $c, $child, $cp);
     
     $mk = $dtd->{'interlinear block'}{'markers'}[$ind];
     
-    unless ($lang = $settings->lang($typef->{'mkr'}{$mk}{'lng'}))
-    { $enc = $defenc; }
-    elsif (defined $lang->{'encoding'})
-    { $enc = $lang->{'encoding'}; }
-    else
-    {
-        $lang->add_specials;
-        $enc = Encode::Registry::find_encoding($lang->{'codepage'}) || $defenc;
-        $lang->{'encoding'} = $enc;
-    }
+    ($enc, $cp) = get_enc($mk, $settings, $typef, $defenc, $opt_s);
 
     if ($first)
     {
-        $str = $enc->decode($first->{'text'});
+        $str = $first->{'text'};
+        if ($enc)
+        { $str = $enc->decode($str); }
+        else
+        { _utf8_on($str); }
         $str =~ s/([<>&'"])/$esc{$1}/og;    # tidy up data]
     }
     else

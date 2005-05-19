@@ -1,0 +1,527 @@
+#!/usr/bin/perl
+# sh2xml_l.pl
+# This is about as good as I can do without any more information. Any suggestions
+# for where to go from here. Someone could take the output from this automated
+# solution and use XSLT to re-organise according to a different DTD.
+
+$VERSION = '1.1.1'; #   MJPH    22-APR-2005     Add \codepage xxx.tec direct TECkit support
+# $VERSION = '1.1.0'; #   MJPH    21-JAN-2005     Add interlinear text support and -t (move -t to -f)
+# $VERSION = '1.0.2'; #   MJPH     8-JUN-2004     Add charset support
+# $VERSION = '1.0.1'; #   MJPH     5-MAR-2003     Add system codepage support
+# $VERSION = '1.0';   #   MJPH     9-MAY-2003     Add Unicode support for Toolbox
+
+use SIL::Shoe::Settings;
+use SIL::Shoe::Data;
+use Encode qw(_utf8_on _utf8_off);
+use Encode::Registry;
+use Encode::TECkit;
+use File::Spec;
+use Getopt::Std;
+
+getopts("bc:e:f:s:t:");
+
+%charsets = (
+    0 => 1252,      # ansi - Western European
+    1 => 0,         # default
+    2 => 0,         # symbol
+    3 => 0,         # invalid
+    77 => 10000,    # mac
+    128 => 932,     # Shift JIS
+    129 => 949,     # Hangul
+    130 => 1361,    # Johab
+    134 => 936,     # GB2312 Simplified Chinese
+    136 => 950,     # Big5 Traditional Chinese
+    161 => 1253,    # Greek
+    162 => 1254,    # Turkish
+    163 => 1258,    # Vietnamese
+    177 => 1255,    # Hebrew
+    178 => 1256,    # Arabic
+    179 => 'arabictrad',
+    180 => 'arabicuser',
+    181 => 'hebrewuser',
+    186 => 1257,    # Baltic
+    204 => 1251,    # Russian (Cyrillic)
+    222 => 874,     # Thai
+    238 => 1250,    # Eastern European
+    254 => 437,     # PC 437
+    255 => 'oem'
+    );
+
+unless (defined $ARGV[0])
+{
+    die <<'EOT';
+    sh2sh -s settings_dir [-c codepage] [-e encs] infile [outfile]
+
+Converts Shoebox data to Shoebox converting to Unicode as it goes.
+
+    -b              Delete empty fields
+    -c codepage     Set default codepage conversion, otherwise none
+    -e enc,enc      Add Encoding:: subsets in Perl 5.8.1
+    -f type         Force database type
+    -s dir          Directory to find .typ files in [.]
+    -t type         Generate Toolbox database of given type
+    
+If outfile is missing, it is created as the input file with extension replaced
+by .db1. This allows a user to drop a data file on a shortcut.
+EOT
+}
+
+unless (defined $ARGV[1])
+{
+    $ARGV[1] = $ARGV[0];
+    $ARGV[1] =~ s/(\.[^.]*)?$/.db1/o;
+}
+
+if ($] > 5.007 && $opt_e)
+{
+    foreach (split(/\s*[,;]\s*/, $opt_e))
+    {
+        require "Encode/$opt_e.pm";
+        &{"Encode::$opt_e::import"};
+    }
+}
+
+$opt_s = "." unless defined $opt_s;
+$settings = SIL::Shoe::Settings->new($opt_s) || die "Unable to read settings directory at $opt_s";
+
+$s = SIL::Shoe::Data->new($ARGV[0], undef, nostripnl => 1)
+        || die "Can't open $ARGV[0]";
+open(OUTFILE, ">$ARGV[1]") || die "Can't create $ARGV[1]";
+# binmode(OUTFILE, ":utf8");
+select OUTFILE;
+
+$typef = $settings->type($s->{' Type'}) || die "Can't find .typ file for type: $s->{' Type'}";
+$typef->read;
+$s->{' key'} = $typef->{'mkrRecord'}[0] || $typef->{'mkrRecord'};        # bug in .typ file results in mkrRecord going in twice
+$lngdef = $settings->lang($typef->{'lngDefault'});
+$lngdef->add_specials if ($lngdef);
+if ($opt_c)
+{ $deflng = $opt_c; }
+elsif ($lngdef->{'codepage'})
+{ $deflng = $lngdef->{'codepage'}; }
+elsif ($^O eq 'MSWin32')
+{
+    require Win32::TieRegistry;
+    Win32::TieRegistry->import(Delimiter => '/');
+
+    $deflng = $Registry->{"LMachine/SYSTEM/ControlSet/CurrentControlSet/Control/Nls/CodePage//ACP"};
+}
+
+$deflng ||= '1252';
+
+$defenc = Encode::Registry::find_encoding($deflng) || Encode::Registry::find_encoding('iso-8859-1')
+    || die "Can't make an encoding converter for $deflng";
+
+$type = $settings->type($opt_f) || die "Can't find .typ file for $opt_f" if ($opt_f);
+$i = 0;
+foreach $x (@{$typef->{'intprc'}})
+{
+    foreach $mk ($x->{'mkrFrom'}, $x->{'mkrTo'})
+    {
+        unless (defined $markers{$mk})
+        {
+            $markers{$mk} = $i;
+            $markers[$i++] = $mk;
+        }
+    }
+    $parent[$markers{$x->{'mkrTo'}}] = $markers{$x->{'mkrFrom'}};
+    push(@{$children[$markers{$x->{'mkrFrom'}}]}, $markers{$x->{'mkrTo'}});
+}
+$lastrow = $i - 1;
+
+if ($opt_t)
+{
+    printf "\\_sh %s  %d  %s\n", $s->{' Version'}, $s->{' CSum'}, $opt_t;
+    print "\\_DateStampeHasFourDigitYear\n" if ($s->{' DateStamp'} == 4);
+    print "\n";
+}
+
+while ($s->readrecord(\@fields))
+{
+    $indent = 0; $instack = 0;
+    @stack = ('shoebox');
+    for ($i = 0; $i <= $#fields; $i++)
+    {
+        $f = $fields[$i];
+        $marker = $f;
+        $marker =~ s/\s+.*$//oi;    # strip to the name back to its sfm
+        $ind = $markers{$marker};
+        if (defined $ind)
+        {
+            unless (defined $parent[$ind])
+            {
+                process_stack($root, \@rows, $lastrow) if ($instack);
+                $root = $ind;
+                $instack = 1;
+                @rows = ();
+                $rows[$ind] = build_pos($s->{$f}, $ind);
+#                print STDERR "$indnum, $innum\n";
+            } else
+            {
+                $rows[$ind] = build_pos($s->{$f}, $ind);
+                $p = $parent[$ind];
+                make_tree($rows[$ind], $rows[$p], $ind, $p) if (defined $p);
+            }
+        } else
+        {
+            if ($instack)
+            {
+                process_stack($root, \@rows, $lastrow);
+                $instack = 0;
+            }
+            if ($s->{$f} eq "")
+            {
+                print "\\$marker\n" unless ($opt_b);
+                next;
+            }
+    
+            $temp = convert($s->{$f}, $marker);
+            _utf8_off($temp);
+            print "\\$marker $temp\n";
+        }
+    }
+    process_stack($root, \@rows, $lastrow) if ($instack);
+    print "\n";
+}
+
+
+sub convert
+{
+    my ($str, $marker) = @_;
+    
+    unless ($lang = $settings->lang($typef->{'mkr'}{$marker}{'lng'}))
+    { $enc = $defenc; }
+    elsif (defined $lang->{'encoding'})
+    { $enc = $lang->{'encoding'}; }
+    elsif (defined $lang->{'UnicodeLang'})
+    { undef $enc; }
+    else
+    {
+        my ($cp);
+        $lang->add_specials;
+        $cp = $lang->{'codepage'};
+        if ($cp eq 'none')
+        { $enc = undef; }
+        elsif ($cp =~ /\.tec$/o)
+        {
+            $enc = Encode::TECkit->new(File::Spec->catfile($opt_s, $cp));
+            unless ($enc)
+            {
+                print STDERR "Unable to find TECkit mapping $cp, using default encoding\n";
+                $enc = $defenc;
+            }
+        }
+        else
+        {
+            $cp ||= $charsets{hex($lang->{'charset'})};
+            $enc = Encode::Registry::find_encoding($cp);
+            if (!$enc && $cp)
+            {
+                print STDERR "Unable to find encoding $cp, using default\n";
+                $enc = $defenc;
+            }
+        }
+        $lang->{'encoding'} = $enc;
+    }
+    $str = $enc->decode($str) if ($enc);
+    $str;
+}
+    
+sub build_pos
+{
+# make linked list of nodes corresponding to each word in the line
+# store starting and ending offsets and indices for each word
+    my ($str, $ind) = @_;
+    my ($match, $num, $pos, $substr, $first, $new, $last);
+
+    $pos = 0;
+    $num = 0;
+#    $str =~ s/^\s?//og;
+    while ($str =~ m/^(\S+)\s*/oi)
+    {
+        $substr = $1;
+        $match = $&;
+        $str = $';
+        $new = SIL::Shoe::Interlin::Node->new(
+            text => $substr,
+            num => $num,
+            line => $ind,
+            pos => $pos,
+            end => $pos + length($substr));
+        if ($last)
+        {
+            $last->{'next'} = $new;
+            $new->{'prev'} = $last;
+            $last = $new;
+        }
+        else
+        {
+            $first = $new;
+            $last = $new;
+        }
+        $pos += length($match);
+        $num++;
+    }
+    return $first;
+}
+    
+
+sub make_tree
+{
+# work out the parent of each word in a row
+# inform parent of its added child. Note we only work at one level, resulting
+# in a tree.
+    my ($row, $prow, $ind, $pind) = @_;
+    my ($child, $parent, $oldp, $plast);
+
+    for ($child = $row; defined $child; $child = $child->{'next'})
+    {
+# find actual parent of this child
+        for ($parent = $prow; defined $parent; $parent = $parent->{'next'})
+        {
+            if ($child->{'pos'} == $parent->{'pos'})
+            {
+                $plast = $parent;
+                last;
+            }
+            elsif ($child->{'pos'} < $parent->{'pos'})
+            { last; }
+            $plast = $parent;
+        }
+        
+        $child->{'parent'} = $plast;
+        push(@{$plast->{'children'}[$ind]}, $child);
+
+        $oldp = $plast;
+        for ($parent = $plast->{'next'}; defined $parent; $parent = $parent->{'next'})
+        {
+            last unless ($child->{'end'} >= $parent->{'pos'});
+            $oldp = $parent;
+        }
+
+        mark_links($plast, $oldp, $pind) if ($oldp ne $plast);
+    }
+}
+
+
+sub mark_links
+{
+# indicates that a range of nodes in a line should be considered as one word
+    my ($first, $last, $ind) = @_;
+    my ($pfirst, $plast, $pind);
+
+    $pind = $parent[$ind];
+    if (defined $pind)
+    {
+        $pfirst = $first->{'parent'};
+        $plast = $last->{'parent'};
+        mark_links($pfirst, $plast, $pind) if ($pfirst ne $plast);
+    }
+
+    for ($pfirst = $first; $pfirst ne $last; $pfirst = $pfirst->{'next'})
+    { $pfirst->{'linked'} = 1; }
+}
+
+
+sub process_stack
+{
+# output a stack:
+#   Link nodes in the row that are empty
+#   link children of linked nodes
+#   remove links: coallesce linked nodes and tidy up linked lists of nodes
+#   convert and set widths for each node
+#   output stack
+    my ($ind, $rows, $lastrow) = @_;
+    my ($p, $c, $op);
+
+    # add default links for parents with no children to merge with previous word
+    for ($p = $rows->[$ind]; defined $p; $p = $p->{'next'})
+    {
+        $op->{'linked'} = 1 if (defined $op && !$p->{'children'});
+        $op = $p;
+    }
+
+    # link children of a linked set of words (for phrase to phrase translation)
+    for ($c = $rows->[$ind]; defined $c; $c = $c->{'next'})
+    {
+        for ($p = $c; defined $p && $p->{'linked'}; $p = $p->{'next'})
+        { }
+
+        if ($p ne $c)
+        {
+            $c->{'chained'} = $p;
+            mark_children($c, $p, $ind);
+            $c = $p;
+        }
+    }
+
+    # convert linked nodes into single nodes and tidy up node sequences
+    for ($c = $rows->[$ind]; defined $c; $c = $c->{'next'})
+    {
+        next unless ($c->{'chained'});
+        remove_links($c, $c->{'chained'}, $ind);
+    }
+
+    # convert stack to unicode and set widths
+    print OUTFILE "$int_mark\n" unless ($contstack);
+    for ($p = $rows->[$ind]; defined $p; $p = $p->{'next'})
+    { stack_convert($p, $ind); }
+    
+    # output stack
+    foreach $c ($ind .. $lastrow)
+    {
+        print "\\$markers[$c] ";
+        for ($p = $rows->[$c]; defined $p; $p = $p->{'next'})
+        { print $p->{'text'}; }
+#        { print convert($p->{'text'}, $markers[$c]); }
+        print "\n";
+    }
+}
+
+
+sub mark_children
+{
+# links all the children in a tree for a given range of nodes in a parent line
+    my ($first, $last, $ind) = @_;
+    my ($cind, $cfirst, $clast, $c, $p);
+
+    foreach $cind (@{$children[$ind]})
+    {
+        # find the spanning range in the children based on starting offsets
+        $cfirst = $first->{'children'}[$cind][0];
+        for ($p = $first; defined $p && $p ne $last->{'next'}; $p = $p->{'next'})
+        {
+            foreach $c (@{$p->{'children'}[$cind]})
+            {
+                if ($cfirst->{'pos'} <= $c->{'pos'})
+                { $clast = $c; }
+                else
+                {
+                    $clast = $cfirst;
+                    $cfirst = $c;
+                }
+            }
+        }
+
+        # link the children and recurse
+        if ($cfirst)
+        {
+            $clast ||= $cfirst;
+            $cfirst->{'chained'} = $clast;
+            for ($c = $cfirst; $c ne $clast; $c = $c->{'next'})
+            { $c->{'linked'} = 1; }
+            $first->{'fchild'}[$cind] = $cfirst;
+            mark_children($cfirst, $clast, $cind);
+        }
+    }
+}
+
+
+sub remove_links
+{
+# coallesce a linked series of words into a single node and adjust node chain
+# accordingly
+    my ($first, $last, $ind) = @_;
+    my ($cind, $c);
+
+    # recurse and set the parent for each first child node
+    foreach $cind (@{$children[$ind]})
+    {
+        $c = $first->{'fchild'}[$cind];
+        next unless $c;
+        remove_links($c, $c->{'chained'}, $cind);
+        $first->{'children'}[$cind] = [$c];
+        $c->{'parent'} = $first;
+    }
+
+    # merge the text of a linked series of words, remove intermediate words from 
+    # linked list of row. IOW true coallescing.
+    for ($c = $first->{'next'}; defined $c && $c ne $last->{'next'}; $c = $c->{'next'})
+    { $first->{'text'} .= " $c->{'text'}"; }
+    $first->{'next'} = $c;
+    $c->{'prev'} = $first;
+    $first->{'linked'} = 0;
+}
+
+sub stack_convert
+{
+# recursively, convert the string in the node, calculate new max width for node,
+# inform all children of new max width of parent, return new max width as width
+# of node
+    my ($p, $ind) = @_;
+    my ($maxwidth, $mwidth, $wid, $cwid, @cwids);
+    
+    $p->{'text'} = convert($p->{'text'}, $markers[$ind]);
+    $p->{'text'} =~ s/\s*$//o;
+    _utf8_off($p->{'text'});
+    $mwidth = bytes::length($p->{'text'});
+    $p->{'width'} = $mwidth;
+    $maxwidth = $mwidth + 1;
+    
+    foreach $cind (@{$children[$ind]})
+    {
+        $cwid = 0;
+        foreach $c (@{$p->{'children'}[$cind]})
+        {
+            $c->{'width'} = stack_convert($c, $cind);
+            $cwid += $c->{'width'};
+        }
+        $p->{'cwids'}[$cind] = $cwid;
+        $maxwidth = $cwid if ($cwid > $maxwidth);
+    }
+    
+    stack_setwidth($p, $ind, $maxwidth);
+    $maxwidth;
+}
+
+sub stack_setwidth
+{
+    my ($p, $ind, $wid) = @_;
+    
+    if ($wid > $p->{'width'})
+    {
+        $p->{'text'} .= ' ' x ($wid - $p->{'width'});
+        $p->{'width'} = $wid;
+    }
+    
+    foreach $cind (@{$children[$ind]})
+    {
+        unless (defined $p->{'children'}[$cind][-1])
+        {
+            my ($new) = SIL::Shoe::Interlin::Node->new();
+            if (defined $p->{'prev'})
+            {
+                $new->{'prev'} = $p->{'prev'}{'children'}[$cind][-1];
+                $new->{'prev'}{'next'} = $new;
+            }
+            if (defined $p->{'next'})
+            {
+                $new->{'next'} = $p->{'next'}{'children'}[$cind][-1];
+                $new->{'next'}{'prev'} = $new;
+            }
+            push (@{$p->{'children'}[$cind]}, $new);
+        }
+        stack_setwidth($p->{'children'}[$cind][-1], $cind, $wid) if ($wid > $p->{'cwids'}[$cind]);
+    }
+}    
+
+
+package SIL::Shoe::Interlin::Node;
+
+sub new
+{
+    my ($class, %attrs) = @_;
+    my ($self) = {%attrs};
+
+    bless $self, ref $class || $class;
+}
+
+sub le
+{
+    my ($test, $against) = @_;
+    my ($p);
+
+    for ($p = $test; defined $p; $p = $p->{'next'})
+    { return 1 if ($p eq $against); }
+    return 0;
+}

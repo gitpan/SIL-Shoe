@@ -1,9 +1,11 @@
-#! perl
+#! /usr/bin/perl
 require 'getopts.pl';
 use SIL::Shoe::Settings;
 # use Encode::Registry;
+use Encode qw(_utf8_on);
 
-$VERSION = "1.34";   # MJPH  22-JAN-2002     Add unicode support
+$VERSION = "1.35";   # MJPH  21-JAN-2005     Fix Unicode support for Perl 5.8
+#$VERSION = "1.34";   # MJPH  22-JAN-2002     Add unicode support
 # $VERSION = "1.3";   # MJPH  20-JAN-2002     Add charset support and \020 escaping
 # $VERSION = "1.2";   # MJPH  29-MAY-2001     Add Unicode support
 # $VERSION = "1.1";   # MJPH  17-APR-2001     Add support for |xx{} inline marking. No nesting.
@@ -243,7 +245,7 @@ sub convert_rtf
                     $cellno = $ref->{'col'};
                 }
                 print "\\pard$ref->{'_rtfstr'} ";
-                $closeStyle = "";
+                $closeStyle = "\\par\n";
                 print convert($t, $rest, 0, $ref->{'lng'});
             }
         } else
@@ -305,9 +307,11 @@ sub simple_conv
     $in =~ s/\020//og;
     if (defined $lang->{'UnicodeLang'})
     {
-        use bytes;
+#        use bytes;
         
-        s/([\xc0-\xff][\x80-\xbf]+)/"\\u" . signed($1) . " "/oge;
+#        s/([\xc0-\xff][\x80-\xbf]+)/"\\u" . signed($1) . " "/oge;
+        _utf8_on($in);
+        $in = join('', map {"\\u" . ($_ > 32676 ? $_ - 65536 : $_)} unpack('U*', $in)); 
     }
     return $in;
 }

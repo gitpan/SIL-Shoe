@@ -1,4 +1,4 @@
-#!perl
+#!/usr/bin/perl
 use SIL::Shoe::Settings;
 use SIL::Shoe::Type;
 use IO::File;

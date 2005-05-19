@@ -1,3 +1,4 @@
+#!/usr/bin/perl
 use Algorithm::Diff (traverse_sequences);
 use Getopt::Std;
 use File::Spec;

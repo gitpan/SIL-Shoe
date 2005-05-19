@@ -1,3 +1,4 @@
+#!/usr/bin/perl
 use SIL::FS;
 use Getopt::Std;
 use IO::File;

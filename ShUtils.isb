@@ -19,7 +19,7 @@ OutputDir=.
 DisableStartupPrompt=yes
 
 [Tasks]
-Name: updatepath; Description: "Add installation directory to &PATH";
+Name: updatepath; Description: "Add installation directory to &PATH"; Flags: restart
 
 [Dirs]
 Name: "{app}\docs"
@@ -40,10 +40,10 @@ Name: "{group}\Remote Working"; Filename: "{app}\docs\team_working.pdf"
 Name: "{group}\Uninstall Shoebox Utilities"; Filename: "{uninstallexe}"
 
 [Run]
-Filename: "{app}\parl.exe"; Parameters: """{app}\shutils.par"" addpath.pl ""{app}"""; Flags: runminimized; Tasks: updatepath
+Filename: "{app}\parl.exe"; Parameters: """{app}\shutils.par"" addpath ""{app}"""; Flags: runminimized; Tasks: updatepath
 Filename: "{app}\parl.exe"; Parameters: """{app}\shutils.par"" addbats.pl ""{app}"""; Flags: runminimized
 
 
 [UninstallRun]
-Filename: "{app}\parl.exe"; Parameters: """{app}\shutils.par"" addpath.pl -r ""{app}"""; Flags: runminimized; Tasks: updatepath
+Filename: "{app}\parl.exe"; Parameters: """{app}\shutils.par"" addpath -r ""{app}"""; Flags: runminimized; Tasks: updatepath
 Filename: "{app}\parl.exe"; Parameters: """{app}\shutils.par"" addbats.pl -r ""{app}"""; Flags: runminimized

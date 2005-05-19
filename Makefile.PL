@@ -7,12 +7,12 @@ getopts('e');
 
 # $opt_e - disable inclusion of encrem.pl in exe
 
-$VERSION = "1.18";
+$VERSION = "1.24";
 
 $fversion = $VERSION;
 $fversion =~ s/\./_/og;
 
-@scripts = grep {-f } glob("scripts/*.pl");
+@scripts = grep {!m/\./o && -f } glob("scripts/*");
 
 # incantation to enable MY::pm_to_blib later on
 push(@ExtUtils::MakeMaker::Overridable, qw(pm_to_blib)) if ($^O eq 'MSWin32');
@@ -44,6 +44,9 @@ WriteMakefile (
         EXE_FILES => \@scripts,
         AUTHOR => "martin_hosken\@sil.org",
         ABSTRACT => "Shoebox support utilities",
+        PREREQ_PM => {
+            'Encode::Registry' => 0
+            },
         PM => {%pms},
         dist => { 'TO_UNIX' => 'perl -Mtounix -e "tounix(\"$(DISTVNAME)\")"' }
     );
@@ -75,8 +78,8 @@ sub MY::postamble
     my (@files) = map {m|scripts/(.*)$|o; $1;} @scripts;
     my ($res, $fh, $files);
     
-    $files = join (' ', map {m|scripts/(.*)\.pl$|o; "$1.bat"} @scripts);
-    $files =~ s/addpath\.bat\s*//o;     # remove addpath since don't need a .bat
+    $files = join (' ', map {m|scripts/(.*)$|o; "$1.bat"} @scripts);
+    $files =~ s/addpath\s*//o;     # remove addpath since don't need a .bat
     $files .= " encrem.bat" unless $opt_e;
     $fh = IO::File->new("> addbats.pl") || die "Can't create addbats.pl";
     
@@ -91,7 +94,7 @@ foreach \$f (qw($files))
     else
     {
         my (\$pl) = \$f;
-        \$pl =~ s/\\.bat/.pl/o;
+        \$pl =~ s/\\.bat//o;
         open(FH, "> \$ARGV[0]\\\\\$f") || die \$@;
         print FH "\@\\"\$ARGV[0]\\\\parl.exe\\" \\"\$ARGV[0]\\\\shutils.par\\" \$pl %1 %2 %3 %4 %5 %6 %7 %8 %9\\n";
         close(FH);
@@ -101,11 +104,11 @@ EOT
     $fh->close();
     
     push (@scripts, "addbats.pl");
-    push (@scripts, "$perlbin/encrem.pl") unless $opt_e;
+    push (@scripts, "$perlbin/encrem") unless $opt_e;
     $res .= "exe : ShUtils_$fversion.exe\n\n";
 
     $res .= "ShUtils_$fversion.exe : scripts\\shutils.par\n";
-    $res .= "\t\\progs\\minno_setup3\\compil32.exe /cc ShUtils.iss\n\n";
+    $res .= "\t\\progs\\inno_setup\\compil32.exe /cc ShUtils.iss\n\n";
     
     $res .= "scripts\\shutils.par : ";
     $res .= join(' ', @scripts);

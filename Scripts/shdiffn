@@ -1,3 +1,4 @@
+#!/usr/bin/perl
 use SIL::Shoe::Diffn;
 use Getopt::Std;
 

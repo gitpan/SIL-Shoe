@@ -1,3 +1,4 @@
+#!/usr/bin/perl
 use SIL::Shoe::Diff3;
 use SIL::FS;
 use Algorithm::Merge qw(merge traverse_sequences3);

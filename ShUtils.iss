@@ -5,7 +5,7 @@
 
 [Setup]
 AppName=SIL Shoebox Utilities
-AppVerName=SIL Shoebox Utilities 1.18
+AppVerName=SIL Shoebox Utilities 1.24
 AppPublisher=SIL International
 AppPublisherURL=http://www.sil.org/computing
 ; AppSupportURL=http://www.sil.org/computing
@@ -15,13 +15,13 @@ DefaultGroupName=Shoebox Utilities
 ; uncomment the following line if you want your installation to run on NT 3.51 too.
 ; MinVersion=4,3.51
 AdminPrivilegesRequired=yes
-OutputBaseFilename=SHUtils_1_18
+OutputBaseFilename=SHUtils_1_24
 OutputDir=.
 ; DisableProgramGroupPage=yes
 DisableStartupPrompt=yes
 
 [Tasks]
-Name: updatepath; Description: "Add installation directory to &PATH";
+Name: updatepath; Description: "Add installation directory to &PATH"; Flags: restart
 
 [Dirs]
 Name: "{app}\docs"
@@ -42,10 +42,10 @@ Name: "{group}\Remote Working"; Filename: "{app}\docs\team_working.pdf"
 Name: "{group}\Uninstall Shoebox Utilities"; Filename: "{uninstallexe}"
 
 [Run]
-Filename: "{app}\parl.exe"; Parameters: """{app}\shutils.par"" addpath.pl ""{app}"""; Flags: runminimized; Tasks: updatepath
+Filename: "{app}\parl.exe"; Parameters: """{app}\shutils.par"" addpath ""{app}"""; Flags: runminimized; Tasks: updatepath
 Filename: "{app}\parl.exe"; Parameters: """{app}\shutils.par"" addbats.pl ""{app}"""; Flags: runminimized
 
 
 [UninstallRun]
-Filename: "{app}\parl.exe"; Parameters: """{app}\shutils.par"" addpath.pl -r ""{app}"""; Flags: runminimized; Tasks: updatepath
+Filename: "{app}\parl.exe"; Parameters: """{app}\shutils.par"" addpath -r ""{app}"""; Flags: runminimized; Tasks: updatepath
 Filename: "{app}\parl.exe"; Parameters: """{app}\shutils.par"" addbats.pl -r ""{app}"""; Flags: runminimized
