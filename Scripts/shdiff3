@@ -48,6 +48,3 @@ else
     $res = system(join(' ',quotemeta($opts{'command'}), $cmd, map {quotemeta($_)} ($first, $base, shift)));
     exit($res >> 8);
 }
-
-__END__
-:endofperl

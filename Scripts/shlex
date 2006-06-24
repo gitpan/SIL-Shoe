@@ -1,0 +1,1468 @@
+#!/usr/bin/perl
+
+use SIL::Shoe::Data;
+use SIL::Shoe::Sort::unicode;
+use SIL::Shoe::Sort::default;
+use SIL::Shoe::Sort::shoe;
+use SIL::Shoe::Sort::numeric;
+use Getopt::Std;
+use XML::Parser;
+use SIL::Shoe::Backend::html;
+use SIL::Shoe::Backend::openoffice;
+use Pod::Usage;
+
+$VERSION="0.6";     # MJPH      21-JUN-2006     Add unique attribute
+# $VERSION="0.5";     # MJPH      12-JUN-2006     Bottom to top rewrite with full nodes
+# $VERSION="0.2";     #   MJPH    10-JUN-2006     Fix sorting
+# $VERSION="0.1";     #   MJPH    25-MAY-2006     Original
+
+getopts('b:c:dhno:s:');
+
+unless ((defined $ARGV[0] && defined $opt_c) || defined $opt_h)
+{
+    pod2usage(1);
+    exit;
+}
+
+if ($opt_h)
+{
+    pod2usage( -verbose => 2);
+    pod2usage( -verbose => 2, -inputfile => "SIL/Shoe/Backend/$opt_b.pm", -pathlist => \@INC) if ($opt_b);
+    exit;
+}
+
+
+my (@layouts, %layouts, $currlayout, $groups, $curr, $currback);
+my (%world);
+
+$xml = XML::Parser->new(Handlers => {Start => sub {
+        my ($xml, $tag, %attrs) = @_;
+        
+        if ($tag eq 'backend')
+        {
+            $currback = $attrs{'type'};
+        }
+        elsif ($tag eq 'property')
+        {
+            $world{'backprops'}{$currback}{$attrs{'name'}} = $attrs{'value'};
+        }
+        elsif ($tag eq "section")
+        {
+            $currlayout = SIL::dict::parser::layout->new(\%world, %attrs);
+            push (@{$world{'layoutlist'}}, $currlayout);
+            if ($attrs{'name'})
+            {
+                $world{'layouts'}{$attrs{'name'}} = $#{$world{'layoutlist'}};
+                $world{'indices'}{"_$attrs{'name'}"} = $currlayout;
+            }
+            $curr = undef;
+        }
+        elsif ($tag eq "letter")
+        {
+            $curr = SIL::dict::parser::letter->new(\%world, %attrs);
+            $currlayout->{'letters'}{$attrs{'name'} || 'primary'} = $curr;
+        }
+        elsif ($tag eq "group")
+        {
+            $next = SIL::dict::parser::group->new($curr, \%world, %attrs);
+            if ($curr)
+            { $curr->add($next); }
+            else
+            { $currlayout->{'groups'}{$attrs{'name'}} = $next; }
+            $curr = $next;
+        }
+        elsif ($tag eq 'switch')
+        {
+            my ($next) = SIL::dict::parser::switch->new($curr, \%world, %attrs);
+            $curr->add($next);
+            $curr = $next;
+        }
+        elsif ($tag eq 'marker')
+        {
+            my ($next) = SIL::dict::parser::marker->new($curr, \%world, %attrs);
+            $curr->add($next);
+            $curr = $next;
+        }
+        elsif ($tag eq 'use-group')
+        {
+            my ($next) = SIL::dict::parser::use->new($curr, \%world, $currlayout, %attrs);
+            $curr->add($next);
+            $curr = $next;
+        }
+        elsif ($tag eq 'output')
+        {
+            my ($next) = SIL::dict::parser::output->new($curr, \%world, %attrs);
+            $curr->add($next);
+            $curr = $next;
+        }
+        elsif ($tag eq 'index')
+        {
+            my ($next) = SIL::dict::parser::index->new($curr, \%world, %attrs);
+            $world{'indices'}{$attrs{'name'}} = $next;
+            $curr = $next;
+        }
+        elsif ($tag eq 'debug')
+        {
+            my ($next) = SIL::dict::parser::debug->new($curr, \%world, %attrs);
+            $curr->add($next);
+            $curr = $next;
+        }
+        }, End => sub {
+        my ($xml, $tag) = @_;
+        
+        $curr = $curr->parent if ($curr);
+        }});
+
+$xml->parsefile($opt_c) if ($opt_c);
+
+if ($opt_b)
+{
+    $opt_b = lc($opt_b);
+    eval "require SIL::Shoe::Backend::$opt_b";
+    die "Can't find backend for $opt_b" if ($@);
+    $backend = "SIL::Shoe::Backend::$opt_b"->new($opt_o, $opt_s, $world{'backprops'}{$opt_b});
+}
+else
+{ $backend = SIL::Shoe::Backend::html->new($opt_o, $opt_s, $world{'backprops'}{'html'}); }
+
+%sorts = (
+    '' => SIL::Shoe::Sort::default->new()
+);
+
+my (%ind_fn);
+
+foreach $index (values %{$world{'indices'}})
+{
+    push (@{$ind_fn{$index->{'filename'}}}, $index);
+    $index->{'index_num'} = $#{$ind_fn{$index->{'filename'}}};
+}
+
+foreach $index (keys %ind_fn)
+{
+    my ($mydb);
+    $mydb = SIL::dict::parser::Shoebox->make_indices($index || $ARGV[0], 
+            map {[$_->get_keys]} @{$ind_fn{$index}});
+    foreach (@{$ind_fn{$index}})
+    { $_->{'db'} = $mydb; }
+}
+
+foreach $lay (@{$world{'layoutlist'}})
+{
+    my ($oldkey);
+    my ($localdb, $newset);
+    
+    $backend->start_section($lay->{'type'}, $lay->{'name'});
+    $lay->iter_keys($lay, sub {
+        my ($lay, $nodeset, $key) = @_;
+
+        $nodeset->{'nodes'}[0][4]{'.old'}[0] = $oldkey;
+        $nodeset->{'nodes'}[0][4]{'.new'}[0] = $key;
+        $oldkey = $key;
+
+        if (defined $lay->{'letters'}{'primary'})
+        { $lay->{'letters'}{'primary'}->execute($nodeset, $backend); }
+
+        if ($lay->{'groups'}{'main'})
+        { $lay->{'groups'}{'main'}->execute($nodeset, $backend); }
+    });
+    $backend->end_section($lay->{'type'}, $lay->{'name'});
+}
+
+$backend->finish;
+
+sub make_sort
+{
+    my ($str) = @_;
+    my ($type) = split(/\|/, $str);
+
+    if ($str =~ m/\.lng/oi)
+    {
+        $type = 'shoe';
+    }
+    eval "require SIL::Shoe::Sort::$type";
+    die "Can't create sorting object $type" if ($@);
+    return "SIL::Shoe::Sort::$type"->new($str);
+}    
+
+sub byMultiLevel
+{
+    my ($a, $b, @types) = @_;
+    my (@x) = split("\000", $a);
+    my (@y) = split("\000", $b);
+    my ($i, $j, $l, $t, $res);
+    
+    for ($i = 0, $j = 0; $i < scalar @x; $i++, $j++)
+    {
+        $t = $types[$j];
+        if (!$t)
+        { $res = $x[$i] cmp $y[$i]; }
+        elsif ($t->isa('SIL::Shoe::Sort::numeric'))
+        { $res = $x[$i] <=> $y[$i]; }
+        elsif (($l = $t->num_fields) > 1)
+        {
+            $res = $t->cmp(join("\000", $x[$i .. $i + $l - 1]),
+                join("\000", $y[$i .. $i + $l - 1]));
+            $i += $l - 1;
+        }
+        else
+        { $res = $t->cmp($x[$i], $y[$i]); }
+        return $res if ($res != 0); 
+    }
+    return -1 if (scalar @y > scalar @x);
+    return 0;
+}
+
+
+package SIL::dict::parser::nodeset;
+
+# fields in a nodeset:
+#   parent - parent nodeset that created this one
+#   dbs    - array of hashes against fields listed in corresponding fields
+#   fields - array of lists of fields in record order in dbs
+#   nodes  - array of nodes which are [index into dbs & fields, first field,
+#            last field + 1, %data an array for each field]
+#   pos    - position of this nodeset in its parent (only in marker elements)
+#            value is propagated except through index lookups
+sub new
+{
+    my ($class, @nodes) = @_;
+    my ($self) = {nodes => [@nodes]};
+    return bless $self, $class;
+}
+
+sub append_node
+{
+    my ($self, @node) = @_;
+    push (@{$self->{'nodes'}}, [@node]);
+    return $#{$self->{'nodes'}};
+}
+
+sub append_record
+{
+    my ($self, $db, $fields) = @_;
+
+    push (@{$self->{'dbs'}}, $db);
+    push (@{$self->{'fields'}}, $fields);
+    return $#{$self->{'dbs'}};
+}
+
+# subset a nodelist based on test then sort on keys, no parent reln setup
+sub subset
+{
+    my ($self, $info) = @_;
+    my ($res) = {%$self};
+
+    if (defined $info->{'test'})
+    {
+        my ($i, $n);
+        $res->{'nodes'} = [];
+        foreach $n (@{$self->{'nodes'}})
+        {
+            my ($r) = eval("\$node = \$n; \$nset = \$self; \$pos = \$i; $info->{'test'}");
+            push (@{$res->{'nodes'}}, $n) if ($r);
+            $i++;
+        }
+        $res->{'count'} = scalar @{$res->{'nodes'}};
+    }
+
+    if (defined $info->{'sort'})
+    {
+        my ($nc, %sorted, @sort_types);
+        foreach $n (@{$res->{'nodes'}})
+        { push (@{$sorted{$n->[3]}}, $nc++); }
+
+        foreach $k (split(' ', $self->{'sort'}))
+        {
+            $main::sorts{$k} = main::make_sort($k) unless (defined $main::sorts{$k});
+            push (@sort_types, $main::sorts{$k});
+        }
+        $res->{'nodes'} = [map {@{$res->{'nodes'}}[@{$sorted{$_}}]} sort {main::byMultiLevel($a, $b, @sort_types)} keys %sorted];
+    }
+    return bless $res, ref $self;
+}
+
+
+sub make_nodeset
+{
+    my ($self, $info) = @_;
+    my ($res);
+
+    if (defined $info->{'index'})
+    {
+        my (@keys);
+        foreach $n (@{$self->{'nodes'}})
+        {
+            my ($list, $nlist);
+            foreach $k (split(' ', $info->{'keys'}))
+            {
+                foreach $v (@{$n->[4]{$k}})
+                { push (@{$nlist}, map {[@{$_}, $v]} @{$list}); }
+                $list = $nlist;
+                $nlist = [];
+            }
+            push (@keys, map {join("\000", @{$_})} @{$list});
+        }
+        $res = $info->{'world'}{'indices'}{$info->{'index'}}->make_nodeset($self, $info, $info->{'unique'}, @keys);
+        $res->{'count'} = scalar @{$res->{'nodes'}};
+    }
+    elsif (defined $info->{'tag'})
+    {
+        my (%sort, $i);
+
+        $res = {%$self};
+        $res->{'nodes'} = [];
+        bless $res, ref $self;
+
+        if (defined $info->{'keys'})
+        { %sort = map {$_ => $i++} split(' ', $info->{'keys'}); }
+        else
+        { %sort = ($info->{'tag'} => 0); }
+
+        foreach $n (@{$self->{'nodes'}})
+        {
+            my ($newn, @sortkey);
+            for ($i = $n->[1]; $i < $n->[2]; $i++)
+            {
+                my ($s) = $self->{'fields'}[$n->[0]][$i];
+                my ($v) = $self->{'dbs'}[$n->[0]]{$s};
+                $s =~ s/\s.*$//o;
+                if ($s eq $info->{'tag'})
+                {
+                    if ($newn)
+                    {
+                        $newn->[2] = $i;
+                        $newn->[3] = join("\000", @sortkey);
+                        push (@{$res->{'nodes'}}, $newn);
+                    }
+                    $newn = [$n->[0], $i];
+                    @sortkey = ();
+                }
+                if (defined $newn)
+                {
+                    push (@{$newn->[4]{$s}}, $v);
+                    $sortkey[$sort{$s}] = $v if (defined $sort{$s});        # takes the last value
+                }
+            }
+            if ($newn)
+            {
+                $newn->[2] = $i;
+                $newn->[3] = join("\000", @sortkey);
+                push (@{$res->{'nodes'}}, $newn);
+            }
+        }
+        $res->{'parent'} = $self;
+        $res = $res->subset($info);
+        $res->{'count'} = scalar @{$res->{'nodes'}};
+    }
+    elsif ($info->{'keys'})
+    {
+        $res = bless {%$self}, ref $self;
+        $res->{'parent'} = $self;
+        foreach $n (@{$res->{'nodes'}})
+        { $n->[3] = join("\000", map {$n->[4]{$_}[0]} split(' ', $info->{'keys'})); }
+    }
+    else
+    {
+        $res = $self->subset($info);
+        $res->{'parent'} = $self;
+    }
+    return $res;
+}
+# returns (value, node, nodeset)
+sub get_nodes
+{
+    my ($en, $ens, $str) = @_;
+    my (@els) = split('/', $str);
+    my ($index, $nisa);
+    
+    for ($i = 0; $i < scalar @els; $i++)
+    {
+        $e = $els[$i];
+        if ($e =~ s/\[(\d*)\]$//o)
+        { $index = $1; }
+        else
+        { $index = undef; }
+
+        if ($e eq '..' && defined $ens)
+        {
+            $ens = $ens->{'parent'};
+            return (undef, undef undef) unless ($ens);
+            if (defined $index)
+            {
+                $en = $ens->{'nodes'}[$index];
+                $nisa = 0;
+            }
+            else
+            { 
+                $en = $ens->{'nodes'};
+                $nisa = 1;
+            }
+        }
+        elsif ($e eq '.')
+        { }
+        elsif ($e)
+        {
+            $en = $en->[0] if ($nisa);
+            if ($index)
+            { return ($en->[4]{$e}[$index] || '', $en, $ens); }
+            else
+            { return ($en->[4]{$e} || '', $en, $ens); }
+        }
+    }
+    $en = $en->[0] if ($nisa);
+    return (undef, $en, $ens);
+}
+
+sub value
+{
+    my ($str, $ind) = @_;
+    my ($lv, $ln, $ls) = get_nodes($node, $nset, $str);
+
+    if (ref $lv eq 'ARRAY')
+    { return $lv->[$ind]; }
+    elsif (defined $lv)
+    { return $lv; }
+    elsif (ref $ln eq 'ARRAY')
+    { return $ln->[3]; }
+    elsif ($ln)
+    { return $ln; }
+    elsif ($ls)
+    { return $ls->{'nodes'}[0][3]; }
+    return undef;
+}
+
+sub count
+{
+    my ($str) = @_;
+    my ($lv, $ln, $ls) = get_nodes($node, $nset, $str);
+
+    return $ls->{'count'};
+}
+
+sub position
+{
+    my ($str) = @_;
+    my ($lv, $ln, $ls) = get_nodes($node, $nset, $str);
+
+#    return $pos if ($ls eq $nset);
+    return $ls->{'pos'};
+}
+
+sub firstchar
+{
+    my ($str, $sort, $level) = @_;
+    my ($res);
+    
+    $main::sorts{$sort} = main::make_sort($sort) unless (defined $main::sorts{$sort});
+    return $main::sorts{$sort}->firstchar($str, $level);
+}
+        
+sub split
+{
+    my ($str) = @_;
+
+    return [CORE::split("\000", $str)];
+}
+
+sub join
+{
+    return CORE::join("\000", @_);
+}
+
+sub regexp
+{
+    my ($str, $re) = @_;
+    my ($res);
+    
+    if ($str =~ m/$re/)
+    { $res = $1; }
+    return $res;
+}
+
+sub cmp
+{
+    my ($a, $b, $sort, $level) = @_;
+
+    $main::sorts{$sort} = main::make_sort($sort) unless (defined $main::sorts{$sort});
+    return $main::sorts{$sort}->cmp($a, $b, $level);
+}
+
+sub upper
+{
+    my ($str, $sort) = @_;
+    
+    $main::sorts{$sort} = main::make_sort($sort) unless (defined $main::sorts{$sort});
+    return $main::sorts{$sort}->uppercase($str);
+}
+    
+sub lower
+{
+    my ($str, $sort) = @_;
+    
+    $main::sorts{$sort} = main::make_sort($sort) unless (defined $main::sorts{$sort});
+    return $main::sorts{$sort}->lowercase($str);
+}
+
+package SIL::dict::parser::group;
+
+sub new
+{
+    my ($class, $parent, $world, %attrs) = @_;
+    my ($self) = {parent => $parent, world => $world, %attrs};
+    return bless $self, $class;
+}
+
+sub add
+{
+    my ($self, $child) = @_;
+    push (@{$self->{'children'}}, $child);
+}
+
+sub parent
+{
+    my ($self) = @_;
+    
+    return $self->{'parent'};
+}
+
+sub execute
+{
+    my ($self, $parent, $backend, %opts) = @_;
+    my ($jobs) = $parent->make_nodeset($self);
+    my ($res);
+    
+    if (defined $self->{'paragraph'})
+    { $backend->new_para($self->{'paragraph'}); }
+
+    if (defined $self->{'before'})
+    { $backend->output($self->{'before'}); }
+    elsif ($opts{count} > 0 && defined $self->{'between'})
+    { $backend->output($self->{'between'}); }
+    
+    if (defined $self->{'style'} && $self->{'style'} eq '')
+    { $backend->output($jobs->{'nodes'}[0][3]); }
+    elsif (defined $self->{'style'} && $self->{'style'})        # don't accidentally define it
+    { $backend->char_style($self->{'style'}, $jobs->{'nodes'}[0][3]); }
+            
+    foreach $c (@{$self->{'children'}})
+    { $res |= $c->execute($jobs, $backend, %opts); }
+
+    if (defined $self->{'after'})
+    { $backend->output($self->{'after'}); }
+    return ($self->{'neg'} ? !$res : $res);
+}
+
+package SIL::dict::parser::switch;
+
+use base 'SIL::dict::parser::group';
+
+sub new
+{
+    my ($class, $parent, $world, %attrs) = @_;
+    my ($self) = {parent => $parent, world => $world, %attrs};
+    return bless $self, $class;
+}
+
+sub execute
+{
+    my ($self, $parent, $backend, %opts) = @_;
+    my ($jobs) = $parent->make_nodeset($self);
+    
+    foreach $c (@{$self->{'children'}})
+    { return 1 if ($c->execute($jobs, $backend, %opts)); }
+    return 0;
+}
+
+package SIL::dict::parser::marker;
+
+use base 'SIL::dict::parser::group';
+
+sub new
+{
+    my ($class, $parent, $world, %attrs) = @_;
+    my ($self) = {parent => $parent, world => $world, %attrs};
+    return bless $self, $class;
+}
+
+sub execute
+{
+    my ($self, $parent, $backend, %opts) = @_;
+    my ($jobs) = $parent->make_nodeset($self);
+    my ($localjob) = bless {%{$jobs}}, ref $jobs;
+    my ($i, $res, $c);
+
+    for ($i = 0; $i < scalar @{$jobs->{'nodes'}}; $i++)
+    {
+        my ($j) = $jobs->{'nodes'}[$i];
+        $localjob->{'nodes'} = [$j];
+        $localjob->{'pos'} = $i;
+        $res = 1;
+        if (defined $self->{'paragraph'})
+        { $backend->new_para($self->{'paragraph'}); }
+        
+        if ($i > 0 && defined $self->{'between'})
+        { $backend->output($self->{'between'}); }
+        
+        if ($self->{'indent'} eq 'tab')
+        { $backend->output_tab; }
+        elsif ($self->{'indent'} eq 'none' || $self->{'indent'} eq '' && !defined $self->{'style'})
+        { }
+        else
+        { $backend->output_space; }
+            
+        if (defined $self->{'before'})
+        { $backend->output($self->{'before'}); }
+            
+        if (defined $self->{'style'} && $self->{'style'} eq '')
+        { $backend->output($j->[3]); }
+        elsif (defined $self->{'style'} && $self->{'style'})
+        { $backend->char_style($self->{'style'}, $j->[3]); }
+            
+        foreach $c (@{$self->{'children'}})
+        { $c->execute($localjob, $backend, %opts); }
+            
+        if (defined $self->{'after'})
+        { $backend->output($self->{'after'}); }
+    }
+    return ($self->{'neg'} ? !$res : $res);
+}
+
+package SIL::dict::parser::use;
+
+use base 'SIL::dict::parser::group';
+
+sub new
+{
+    my ($class, $parent, $world, $currlayout, %attrs) = @_;
+    my ($self) = {parent => $parent, world => $world, layout => $currlayout, %attrs};
+    return bless $self, $class;
+}
+
+sub execute
+{
+    my ($self, $parent, $backend, %opts) = @_;
+    my ($jobs) = $parent->make_nodeset($self);
+    my ($res);
+
+    return $self->{'layout'}{'groups'}{$self->{'name'}}->execute($jobs, $backend, %opts) if (defined $self->{'layout'}{'groups'}{$self->{'name'}});
+    return 0;
+}
+
+package SIL::dict::parser::output;
+
+use base 'SIL::dict::parser::group';
+
+sub new
+{
+    my ($class, $parent, $world, %attrs) = @_;
+    my ($self) = {parent => $parent, world => $world, %attrs};
+    return bless $self, $class;
+}
+
+sub execute
+{
+    my ($self, $parent, $backend, %opts) = @_;
+    my ($mydb, $text);
+
+    if (defined $self->{'test'} && !eval "\$SIL::dict::parser::nodeset::nset = \$parent; \$SIL::dict::parser::nodeset::node = \$parent->{'nodes'}[0]; package SIL::dict::parser::nodeset; $self->{'test'}")
+    { return 0; }
+
+    if (defined $self->{'text'})
+    { $text = $self->{'text'}; }
+    elsif (defined $self->{'value'})
+    { $text = eval "\$SIL::dict::parser::nodeset::nset = \$parent; \$SIL::dict::parser::nodeset::node = \$parent->{'nodes'}[0]; package SIL::dict::parser::nodeset; $self->{'value'}"; }
+
+    if (defined $self->{'paragraph'})
+    { $backend->new_para($self->{'paragraph'}); }
+
+    if ($opts{'count'} > 0 && defined $self->{'between'})
+    { $backend->output($self->{'between'}); }
+
+    if ($self->{'indent'} eq 'tab')
+    { $backend->output_tab; }
+    elsif ($self->{'indent'} eq 'none')
+    { }
+    else
+    { $backend->output_space; }
+
+    if (defined $self->{'before'})
+    { $backend->output($self->{'before'}); }
+
+    if (defined $self->{'style'} && $self->{'style'})
+    { $backend->char_style($self->{'style'}, $text); }
+    elsif ($text)
+    { $backend->output($text); }
+
+    if (defined $self->{'after'})
+    { $backend->output($self->{'after'}); }
+    return 1;
+}
+
+package SIL::dict::parser::debug;
+
+use base 'SIL::dict::parser::output';
+
+sub new
+{
+    my ($class, $parent, $world, %attrs) = @_;
+    my ($self) = {parent => $parent, world => $world, %attrs};
+    return bless $self, $class;
+}
+
+sub execute
+{
+    my ($self, $parent, $backend, %opts) = @_;
+    my ($mydb, $text);
+
+    return 0 unless ($main::opt_d);
+
+    if (defined $self->{'test'} && !eval "\$SIL::dict::parser::nodeset::nset = \$parent; \$SIL::dict::parser::nodeset::node = \$parent->{'nodes'}[0]; package SIL::dict::parser::nodeset; $self->{'test'}")
+    { return 0; }
+
+    if (defined $self->{'text'})
+    { $text = $self->{'text'}; }
+    elsif (defined $self->{'value'})
+    { $text = eval "\$SIL::dict::parser::nodeset::nset = \$parent; \$SIL::dict::parser::nodeset::node = \$parent->{'nodes'}[0]; package SIL::dict::parser::nodeset; $self->{'value'}"; }
+
+    if ($text)
+    { print STDOUT "$text\n"; }
+    return 0;
+}
+
+
+package SIL::dict::parser::letter;
+
+sub new
+{
+    my ($class, $world, %attrs) = @_;
+    my ($self) = {world => $world, %attrs};
+    return bless $self, $class;
+}
+
+sub add
+{
+    my ($self, $child) = @_;
+    push (@{$self->{'children'}}, $child);
+}
+
+sub parent
+{
+    my ($self) = @_;
+    
+    return $self->{'parent'};
+}
+
+sub execute
+{
+    my ($self, $nodes, $backend, %opts) = @_;
+    my ($mydb, $res, $text);
+
+    if (defined $self->{'test'})
+    { $res = eval "\$SIL::dict::parser::nodeset::nset = \$nodes; \$SIL::dict::parser::nodeset::node = \$nodes->{'nodes'}[0]; package SIL::dict::parser::nodeset; $self->{'test'}"; }
+    else
+    { $res = 1; }
+
+    if ($res)
+    {
+        $backend->start_letter();
+
+        if (defined $self->{'text'})
+        { $text = $self->{'text'}; }
+        elsif (defined $self->{'value'})
+        { $text = eval "\$SIL::dict::parser::nodeset::nset = \$nodes; \$SIL::dict::parser::nodeset::node = \$nodes->{'nodes'}[0]; package SIL::dict::parser::nodeset; $self->{'value'}"; }
+
+        if (defined $self->{'paragraph'})
+        { $backend->new_para($self->{'paragraph'}); }
+        
+        if (defined $self->{'before'})
+        { $backend->output($self->{'before'}); }
+
+        if (defined $self->{'style'} && $self->{'style'})
+        { $backend->char_style($self->{'style'}, $text); }
+        elsif ($text)
+        { $backend->output($text); }
+
+        foreach $c (@{$self->{'children'}})
+        { $c->execute($nodes, $backend); }
+
+        if (defined $self->{'after'})
+        { $backend->output($self->{'after'}); }
+
+        $backend->end_letter();
+        return 1;
+    }
+}
+
+package SIL::dict::parser::index;
+
+sub new
+{
+    my ($class, $curr, $world, %attrs) = @_;
+    my ($self) = {parent => $curr, world => $world, %attrs};
+    return bless $self, $class;
+}
+
+sub parent
+{
+    my ($self) = @_;
+    return $self->{'parent'};
+}
+
+sub get_keys
+{
+    my ($self) = @_;
+
+    return (split(' ', $self->{'keys'}));
+}
+
+sub iter_keys
+{
+    my ($self, $info, $code) = @_;
+    my (@sort_types, @sorted, $i, $res);
+
+    foreach $i (split(' ', $info->{'sort'}))
+    {
+        $main::sorts{$i} = main::make_sort($i) unless (defined $main::sorts{$i});
+        push (@sort_types, $main::sorts{$i});
+    }
+    @sorted = sort {main::byMultiLevel($a, $b, @sort_types)} keys %{$self->{'db'}{'indices'}[$self->{'index_num'}]};
+    
+    foreach $i (@sorted)
+    {
+        my ($nodeset) = $self->make_nodeset(undef, $info, $self->{'unique'}, $i);
+        next unless (scalar @{$nodeset->{'nodes'}});        # skip if empty
+        &{$code}($info, $nodeset, $i);
+        $res = 1;
+    }
+    return $res;
+}
+
+# makes a base nodeset that is passed for filtering and ordering
+sub make_nodeset
+{
+    my ($self, $parent, $info, $unique, @keys) = @_;
+    my ($nodeset) = SIL::dict::parser::nodeset->new;
+    my ($nodecount, $k, $i, $f, $res);
+
+    $nodeset->{'parent'} = $parent;
+
+    foreach $k (@keys)
+    {
+        my (@inds) = @{$self->{'db'}{'indices'}[$self->{'index_num'}]{$k}};
+        if ($unique)
+        {
+            my (%ind_unique) = map {$_ => 1} @inds;
+            @inds = sort {$a <=> $b} keys %ind_unique;
+        }
+        foreach $i (@inds)
+        {
+            my (%data, %db, $keyval);
+            my ($fields) = $self->{'db'}->readrecord($i);
+
+            foreach $f (@$fields)
+            {
+                my ($t) = $f;
+                my ($dat) = $self->{'db'}->getfield($f);
+                $keyval = $dat unless (defined $keyval);
+
+                $t =~ s/\s*\d+$//o;
+                push (@{$data{$t}}, $dat);
+                $db{$f} = $dat;
+            }
+            $nodeset->append_record(\%db, $fields);
+            $nodeset->append_node($nodecount, 0, scalar @{$fields}, $k, \%data);
+            $nodecount++;
+        }
+    }
+
+    $res = $nodeset->subset($info);
+    $res;
+}
+
+
+package SIL::dict::parser::layout;
+
+use base 'SIL::dict::parser::index';
+
+sub new
+{
+    my ($class, $world, %attrs) = @_;
+    my ($self) = {world => $world, %attrs};
+    return bless $self, $class;
+}
+
+
+package SIL::dict::parser::Shoebox;
+
+use SIL::Shoe::Data;
+
+sub make_indices
+{
+    my ($class, $filename, @indices) = @_;
+    my ($db) = SIL::Shoe::Data->new($ARGV[0], undef, unicode => 1) || die "Can't open database $filename";
+    my ($self) = {'db' => $db};
+
+    foreach $i (@indices)       # this is the slow way for now
+    {
+        $db->index(@{$i});
+        push (@{$self->{'indices'}}, $db->{' index'});
+    }
+    return bless $self, $class;
+}
+
+sub readrecord
+{
+    my ($self, $offset) = @_;
+    my (@flist);
+
+#    return if (defined $offset && $self->{'db'}{' loc'} == $offset);
+    $self->{'db'}->readrecord(\@flist, $offset);
+    $self->{'db'}{' loc'} = $offset;
+    return [@flist];
+}
+
+sub getfield
+{
+    my ($self, $f) = @_;
+
+    return $self->{'db'}{$f};
+}
+
+
+__END__
+
+=head1 TITLE
+
+shlex - typesets a dictionary
+
+=head1 SYNOPSIS
+
+  shlex -c config.xml [-o outfile] [-s style_info] [-b backend] [-n] [-d] infile
+  shlex -h
+
+Typesets an sfm dictionary according to a configuration to generate output in
+a given format.
+
+=head1 OPTIONS
+
+  -b backend        Which backend module to use [html]
+  -c config.xml     Configuration file for controlling the typesetting
+  -h                Give full help
+  -n                Sort keys by line number of first occurrence (i.e. no sort)
+  -o outfile        Where to store the output (or stdout)
+  -s style_info     Backend specific configuration
+
+=head1 DESCRIPTION
+
+This documentation is aimed at programmers rather than providing a tutorial.
+I'm too close to the code to write the tutorial at this time.
+
+The best way to really control shlex is to have some kind of understanding of
+how it works even if the understanding is somewhat high level.
+
+An shlex configuration consists of 2 parts, parameters to be passed to the
+backend, and a sequence of sections. Each section corresponds to a major
+section in the dictionary be it the main dictionary output or an index of some
+kind such as a reverse finder or semantic domain based index. What a section
+does is to sort the dictionary according to the sort keys given and then
+to process each nodeset of records with a given key by passing it to a group
+in the section called C<main>.
+
+shlex is basically a nodeset processor. It thinks in terms of nodesets. Nodesets
+are a concept borrowed from XML. For an sfm style database a nodeset can be
+thought of as a set of ranges. Each range is a contiguous sequence of fields
+within a record, for example the whole record or all of the fields from one
+marker up to but not including the next occurrence of a field with the same
+marker. A set of ranges can be collected from different records (in fact
+very often each range is from a different record). shlex works with such node
+or range sets by passing them from parent element to child element according
+to the type of element involved.
+
+A C<group> element takes a nodeset and passes it to each of its children in turn.
+There are 3 other elements that take nodesets in the way a C<group> element
+does. The C<marker> element iterates through its nodeset and passes each node
+to each of its child elements in turn. The C<switch> element passes its
+nodeset to each of its children in turn and stops when one of the children
+returns true. This is useful for alternation.
+
+The nodeset that is passed can be filtered using the C<test> attribute. It can
+also be sorted on fields within each node. But this is true for any of the
+
+The configuration file is an XML file that controls the typesetting of each
+dictionary entry. The language consist of 4 key elements.
+
+=over 4
+
+=item group
+
+Each group is a sequence of elements which are processed in order to output
+information. Each group is named and processing starts by executing all the
+elements in the group named C<main>. A group is executed over a range of
+markers, which starts out being all the markers in the record.
+
+=item use-group
+
+Executes another group using the same range of markers that is active for the
+use-group element.
+
+=item marker
+
+A marker is used to match all occurrences of the given sfm (in the tag attribute)
+within the parent range of markers. For each marker that matches an optional test
+is run and if the test passes then if a paragraph attribute is given a new
+paragraph is started with the given style. Then any before text is output in the
+default style of the paragraph. Then if a style attribute exists, then the contents
+of the field are output using that character style. Then any children are output
+as if the marker were a group. Then the after text is output using the default
+paragraph style. Finally C<use-group> passes its nodeset to another named group in
+the section.
+
+An element may assemble its nodeset from 3 sources. It can use the nodeset it has
+been passed, in which case it can filter it using the C<test> attribute and sort it
+on any fields in each node (the last field occurring is used). It can make a set
+of subnodes by taking a marker in each node and assembling a nodeset for that node
+which is the field with that marker up to the next field with the same marker
+which starts a new subnodes. Finally all the subnodes from all the nodes in the
+set are joined into one big nodeset which again can be filtered and sorted.
+Finally, a nodeset may be assembled by looking up records against a particular
+set of fields in the incoming nodeset. Each node is search for the first occurrence
+of each field in the C<keys> attribute and a search key is created. This is
+looked up in an index and the resulting nodes added to the output nodeset.
+The output nodeset can be filtered and sorted.
+
+=item output
+
+Outputs the given C<text> attribute or the calculated C<value> attribute if the
+optional C<test> attribute is passed. Returns true if the test is passed.
+
+=item debug
+
+This is much like an output element but its output is sent to STDOUT for
+debugging purposes, when the option C<-d> is used on the command line.
+
+=back
+
+=head2 Indices
+
+Indices are named globally regardless of where they are defined. Each section also
+creates an index with the name of the section prepended with an underscore C<_>.
+An index may be used to access other files than the input file. A section works
+by iterating over the keys in the index creating a nodeset from all the records
+that match that key. It then passes that nodeset to the first the C<letter>
+element named C<primary> and then on to the C<group> element named C<main>.
+
+The C<letter> element is used to control the section headings used for character
+change headings and groupings.
+
+=head2 Expression functions
+
+The test attribute is a perl expression that can be used to further constrain the
+marker used. The following functions are provided. Remember that since this is
+a perl expression even node paths will need to be marked as strings,
+
+=over 8
+
+=item value(nodeset|field, [index])
+
+This takes a string and an optional index. Each nodeset knows about its parent
+so it is possible to track back through the nodesets to one corresponding
+to a particular ancestral element in the configuration. In addition, each
+node in a nodeset has a string associated with it which is considered the
+value of the node. A nodeset is considered as an array of nodes and by default
+the first node in a nodeset is used when a string is required.
+
+In addition it is possible to query the fields in the node being processed
+or filtered. Note it is not possible to query the fields in any other
+nodes. Each field is considered to be an array of all fields with that name.
+Again the default index is 0.
+
+=item count(nodeset|field)
+
+Returns the number of nodes or fields in the referenced array of nodes or
+fields.
+
+=item position(nodeset)
+
+The C<marker> element iterates over its output nodeset. It is possible for a
+child to query the iteration number it is being executed within a C<marker>'s
+nodeset. All other elements just take on the position of their parent.
+
+=item firstchar(string, sort, level, ignore)
+
+This takes a string and finds the first character in it. It uses sort principles
+of including characters at a given level and ignoring or including characters
+of a lower level. Thus if a is a primary character, ' a secondary one and * a tertiary one
+
+    firstchar("a*'", "unicode", 0, 0) -> "a"   ("*", "'")
+    firstchar("a*'", "unicode", 1, 0) -> "a"   ("*", "'")
+    firstchar("a*'", "unicode", 0, 1) -> "a"   ()
+    firstchar("a*'", "unicode", 1, 1) -> "a'"  ()
+
+The sort parameter specifies a sort type to use be it C<numeric>, C<unicode>,
+nothing or some other. See the section on sorting.
+
+=item split(string)
+
+This returns an array. Keys made from multiple fields are joined using a null
+character. This function splits them up.
+
+=item join(string, [string, ...])
+
+Joins elements together to form a splittable string.
+
+=item regexp(string, regexp)
+
+This runs the regexp over the string returning the first group ($1)
+
+=item cmp(string, string, sort, level)
+
+Compares two strings using a given sort order at a given level. Returns
+1 if the first string is 'greater' than the second string; 0 if they are
+equal and -1 otherwise.
+
+=item lower(string)
+
+Returns the lowercase form of string
+
+=item upper(string)
+
+Returns the uppercase form of string
+
+=back
+
+=head2 Attributes
+
+Here we list all the key attributes and what they do and mean
+
+=over 8
+
+=item after
+
+The contents of this attribute are output after all each iteration over the
+nodeset. Thus for a C<group> it is output once, whereas for a C<marker> it
+is output after each node is processed by the C<marker>'s children.
+
+=item before
+
+The contents of this attribute are output before each node is processed. Thus
+for a C<group> it is output once, whereas for a C<marker> it is output before
+each node is processed by the C<marker>'s children (and before any text is
+output using the C<style> attribute)
+
+=item between
+
+This is output only before the C<before> and C<indent> attributes if this is
+not the first node being processed.
+
+=item filename
+
+Indexes (including sections) may draw their index from another file than the
+input file. The filename is the file to use in the index and all access to
+that index will be drawn from that file.
+
+=item indent
+
+Specifies how much indent to insert before any C<before> or output. No indent
+occurs at the beginning of a paragraph. Values supported are:
+
+=over 8
+
+=item none
+
+Don't output any space
+
+=item space
+
+Output a space. This is the default
+
+=item tab
+
+Output a tab.
+
+=back
+
+Note that if there is no output (i.e. C<style> isn't defined) then the default
+behaviour for C<indent> becomes C<none>.
+
+=item index
+
+Assembles the output nodeset by assembling lookup C<keys> from the input nodeset
+and then using these to create an output nodeset according to C<sort>.
+
+=item keys
+
+Keys have two uses in shlex.
+
+They specify the fields to use when creating an index key. In an C<index> element
+it specifies the fields to use in a record, and all combinations are indexed. 
+
+In a processing element it specifies the fields to use from the input nodeset when
+constructing the value of a node. Node values are used for sorting the nodes in
+a nodeset. Note that only the first occurence of each field is used.
+
+=item name
+
+Used to name elements, for example groups and indexes, so that they can be
+referenced again in use-group elements for exaxmple.
+
+=item neg
+
+Negates the result of a processing element. A processing element is considered to
+be true if it creates a non-empty nodeset and that the processing of any
+children according to that nodeset results in at least one true result. This
+attribute is useful in a C<switch> element to say: if the C<test> is true then
+continue processing the other children, otherwise stop.
+
+=item paragraph
+
+Specifies that this element starts a new paragraph of the given style. Only one
+paragraph is started for one element.
+
+=item sort
+
+Specifies a list of sorting algorithms one for each of the fields specified in
+the C<keys> attribute. This attribute is not needed in an C<index> element, since
+sorting is only done on nodes in a nodeset not on indexes which are merely for
+looking things up. See the section on sorting for more information.
+
+=item style
+
+Specifies a character style to use to output the C<value()> of a particular node
+in a nodeset. In the case of C<group> this is the first node of the nodeset. For
+C<marker>s each node in the set causes some output. C<style> may be empty in
+which case the text is output using the underlying paragraph style.
+
+=item tag
+
+Specifies a field marker to find within each node from which a new sub node is
+created.
+
+=item test
+
+This is a perl expression that is used to filter a nodeset. It makes use of
+the expression functions and is tested for non-zero being considered as the
+test passing.
+
+=item text
+
+Specifies text to be output. The text is not evaluated and is output unchanged.
+
+=item unique
+
+When processing an index, only add a record to a nodeset once. I.e. don't have
+the same record in the nodeset more than once.
+
+=item value
+
+Specifies an expression to be evaluated and output as text.
+
+=back
+
+=head2 Sorting
+
+One of the most complex issues when creating a dictionary is to ensure that the
+dictionary is sorted correctly in all the different areas where sorting occurs.
+For this reason shlex supports a relatively powerful array of sorting options.
+Each of the different support sorting algorithms are listed here.
+
+Sort algorithms are also used for tokenizing particularly in the C<firstchar>
+function.
+
+=over 8
+
+=item default
+
+This is the default sorting option and uses perl's implicit binary cmp function.
+The firstchar is simply the first character of the string.
+
+=item numeric
+
+Does a numeric comparison treating the value as numbers rather than strings. It
+will also handle strings of the form: x.y.z... as an array of numbers to be
+compared. firstchar returns the whole string up to the first .
+
+=item unicode
+
+This uses L<Unicode::Collate> to compare strings and comparison can be done
+at different sorting levels. For this the level should be specified after the
+unicode as in C<unicode|2>. firstchar takes sorting levels into account.
+
+=item language.lng|order
+
+This sort method uses a Shoebox .lng file and an optional specific order
+within that langauge file. If no order is specified then the default sort order
+is used.
+
+=back
+
+
+=head2 Configuration DTD
+
+A DTD for the configuration file is:
+
+  <!ELEMENT layout (backend*, section+)>
+
+  <!ELEMENT backend (property*)>
+  <!ATTLIST backend
+        type        CDATA #REQUIRED>
+
+  <!ELEMENT property>
+  <!ATTLIST property
+        name        CDATA #REQUIRED
+        value       CDATA #REQUIRED>
+
+  <!ELEMENT section ((index | letter)*, group+)>
+  <!ATTLIST section
+        type        CDATA #REQUIRED
+        name        CDATA #IMPLIED
+        keys        CDATA #REQUIRED
+        sort        CDATA #IMPLIED
+        unique      CDATA #IMPLIED
+        test        CDATA #IMPLIED>
+
+  <!ELEMENT letter (output | group | marker | switch | use-group | debug)*>
+  <!ATTLIST letter
+        name        CDATA #REQUIRED
+        test        CDATA #REQUIRED
+        value       CDATA #IMPLIED
+        text        CDATA #IMPLIED
+        paragraph   CDATA #IMPLIED
+        before      CDATA #IMPLIED
+        style       CDATA #IMPLIED
+        after       CDATA #IMPLIED>
+        
+  <!ELEMENT group (group | use-group | marker | switch | switch | debug)+>
+  <!ATTLIST group
+        name        CDATA #REQUIRED
+        paragraph   CDATA #IMPLIED
+        before      CDATA #IMPLIED
+        between     CDATA #IMPLIED
+        style       CDATA #IMPLIED
+        after       CDATA #IMPLIED
+        index       CDATA #IMPLIED
+        keys        CDATA #IMPLIED
+        sort        CDATA #IMPLIED
+        unique      CDATA #IMPLIED
+        test        CDATA #IMPLIED
+        tag         CDATA #IMPLIED>
+
+  <!ELEMENT use-group>
+  <!ATTLIST use-group
+        name        CDATA #REQUIRED
+        text        CDATA #IMPLIED
+        index       CDATA #IMPLIED
+        keys        CDATA #IMPLIED
+        sort        CDATA #IMPLIED
+        unique      CDATA #IMPLIED
+        test        CDATA #IMPLIED
+        tag         CDATA #IMPLIED>
+
+  <!ELEMENT marker (use-group | marker | switch | group | output | debug)*>
+  <!ATTLIST marker
+        tag         CDATA #REQUIRED
+        test        CDATA #IMPLIED
+        paragraph   CDATA #IMPLIED
+        indent      CDATA #IMPLIED
+        before      CDATA #IMPLIED
+        between     CDATA #IMPLIED
+        style       CDATA #IMPLIED
+        after       CDATA #IMPLIED
+        index       CDATA #IMPLIED
+        keys        CDATA #IMPLIED
+        sort        CDATA #IMPLIED
+        unique      CDATA #IMPLIED
+        neg         CDATA #IMPLIED>
+
+  <!ELEMENT switch (switch | marker | group | output | debug | use-group)+>
+  <!ATTLIST switch
+        tag         CDATA #REQUIRED
+        test        CDATA #IMPLIED
+        index       CDATA #IMPLIED
+        keys        CDATA #IMPLIED
+        sort        CDATA #IMPLIED
+        unique      CDATA #IMPLIED
+        neg         CDATA #IMPLIED>
+  
+
+  <!ELEMENT index>
+  <!ATTLIST index
+        filename    CDATA #IMPLIED
+        name        CDATA #REQUIRED
+        keys        CDATA #REQUIRED>
+
+  <!ELEMENT output>
+  <!ATTLIST
+        test        CDATA #IMPLIED
+        text        CDATA #IMPLIED
+        value       CDATA #IMPLIED
+        paragraph   CDATA #IMPLIED
+        style       CDATA #IMPLIED
+        before      CDATA #IMPLIED
+        after       CDATA #IMPLIED
+        indent      CDATA #IMPLIED>
+
+  <!ELEMENT debug>
+  <!ATTLIST
+        test        CDATA #IMPLIED
+        text        CDATA #IMPLIED
+        value       CDATA #IMPLIED>
+        
+=head2 Limitations
+
+Here are some things that this program won't do.
+
+=over 8
+
+=item .
+
+Add or change any fields in the database. If you need to munge your data before
+processing, e.g. splitting up fields. Then this should be done before running
+shlex.
+
+=item .
+
+This program presumes the data it is processing is in Unicode even if it isn't.
+I.e. if you want to work with legacy encoded data then convert it to Unicode say
+as codepage 1252 and then work with it in that way.
+
+=back
+
+=head1 TODO
+
+=over 8
+
+=item .
+
+Add system locale based sorting and configuration
+
+=item .
+
+Add chinese sorting (that takes two fields) when I get a chinese cmp module
+
+=item .
+
+The documentation is poor and rushed.
+
+=back
+
+=comment
+
+Some thoughts on integrating XML based databases into this system.
+
+Rather than forcing the XML into a particular element naming scheme, one
+approach would be to map the fieldname queries to XML values using xpath.
+So there would need to be a description in another file to map from
+the fieldnames used above into xpath in the XML file. Each xpath would be
+relative to the record node.
+
+Probably the XML file would not be read into memory in its entirety, so
+each record would be read in as needed (with the record being held completely
+under one node, which would be indexed). It may be that we could read the
+whole database into memory in which case a more relational record structure
+would be possible with non-local nodes appearing in the record. But for
+simplicity a record would still have to map to an element rather than an
+attribute say.
+
+This all would require some major restructuring of the code to account for the
+fact that a tag test is simply an xpath lookup to get a nodeset and so on.
+

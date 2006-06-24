@@ -1,7 +1,10 @@
+#!/usr/bin/perl
+
 use XML::Parser;
 use SIL::Shoe::Data;
 use IO::File;
 use Getopt::Std;
+use Encode;
 use Encode::TECkit;
 
 getopts('c:');
@@ -21,12 +24,13 @@ $sh = SIL::Shoe::Data->new($ARGV[0]) || die "Can't open $ARGV[0] for reading";
 $ofh = IO::File->new("> $ARGV[1]") || die "Can't create $ARGV[1]";
 
 $ofh->print("\\_sh $sh->{' Version'} $sh->{' CSum'} $sh->{' Type'}\n");
-$ofh->print("\\DateStampHasFourDigitYear\n") if ($sh->{' DateStamp'} == 4);
+$ofh->print("\\_DateStampHasFourDigitYear\n") if ($sh->{' DateStamp'} == 4);
 
 $xfh = IO::File->new("< $opt_c") || die "Can't open $opt_c";
 $xtext = join('', <$xfh>);
 $xml = XML::Parser->new(Style => 'Subs', Pkg => 'SIL::Shoe::Shed',
         Handlers => {'Char' => sub {
+            use bytes;
             my ($xml, $text) = @_;
             $xml->{' stack'}[-1]{' text'} .= $text if (scalar @{$xml->{' stack'}});
             }},
@@ -74,6 +78,8 @@ sub insert_
     my ($xml, $tag) = @_;
     my ($attrs) = pop(@{$xml->{' stack'}});
     my ($mk) = $attrs->{'sfm'};
+#    my ($str) = encode_utf8($attrs->{' text'});
+    my ($str) = $attrs->{' text'};
     my ($i);
     
     for ($i = 0; $i < scalar @{$xml->{' fields'}}; $i++)
@@ -87,9 +93,9 @@ sub insert_
         else
         { $mk = "$mk 0"; }
     }
-    $attrs->{' text'} =~ s/^\s*//o;
-    $attrs->{' text'} =~ s/\s*$//o;
-    $xml->{' sh'}{$mk} = $attrs->{' text'};
+    $str =~ s/^\s*//o;
+    $str =~ s/\s*$//o;
+    $xml->{' sh'}{$mk} = $str;
     splice(@{$xml->{' fields'}}, $i + ($attrs->{'relative'} eq 'after' ? 1 : 0), 0, $mk);
 }
 
@@ -118,7 +124,7 @@ sub teckit
     push (@{$xml->{' stack'}}, {%attrs});
     unless (defined $teckits{$attrs{'file'}})
     {
-        $teckits{$attrs{'file'}} = Encode::TECkit->new($attrs{'file'}) or die "Can't find teckit file $attrs{'file'}";
+        $teckits{$attrs{'file'}} = Encode::TECkit->new($attrs{'file'}) || die "Can't find teckit file $attrs{'file'}";
     }
 }
 
@@ -129,7 +135,12 @@ sub teckit_
     my ($str) = gettext($xml, $attrs);
     
     if ($attrs->{'dir'} eq 'encode')
-    { $xml->{' stack'}[-1]{' text'} = $teckits{$attrs->{'file'}}->encode($str); }
+    {
+        $xml->{' stack'}[-1]{' text'} = $teckits{$attrs->{'file'}}->encode(Encode::decode_utf8($str));
+    }
     else
-    { $xml->{' stack'}[-1]{' text'} = $teckits{$attrs->{'file'}}->decode($str); }
+    {
+	my ($res) = $teckits{$attrs->{'file'}}->decode($str);
+        $xml->{' stack'}[-1]{' text'} = Encode::encode_utf8($res);
+    }
 }

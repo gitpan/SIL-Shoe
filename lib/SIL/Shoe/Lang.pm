@@ -124,6 +124,31 @@ sub build_sorts
     $self;
 }
 
+=head2 $s->ducet($name)
+
+Returns the given sort order as a set of unicode style ducet keys
+
+=cut
+sub ducet
+{
+    my ($self, $name) = @_;
+    my ($single, $multi, $c, $res);
+
+    $self->build_sorts unless (defined $self->{'srt'}{$name}{' single'});
+    $single = $self->{'srt'}{$name}{' single'};
+    $multi = $self->{'srt'}{$name}{' multi'};
+    foreach $c (sort {$single->{$a} cmp $single->{$b}} keys %{$single})
+    {
+        $res .= sprintf("%04X", unpack('U', $c));
+        $res .= " [." . join(".", map {sprintf("%04X", $_)} unpack("c*", $single->{$c})) . " .0000.0000]\n";
+    }
+    foreach $c (sort {$multi->{$a} cmp $multi->{$b}} keys %{$multi})
+    {
+        $res .= join(" ", map {sprintf("%04X", $_)} unpack('U*', $c));
+        $res .= " [." . join(".", map {sprintf("%04X", $_)} unpack("c*", $multi->{$c})) . ".0000.0000]\n";
+    }
+    $res;
+}
 
 =head2 $s->sort_key($name, $str)
 
@@ -165,12 +190,137 @@ sub sort_key
     return $resp . "\000" . $ress;
 }
 
+=head2 $s->cmp($name, $level, $a, $b)
+
+Compares the two strings according to the given sort order at the given level.
+Returns +1, 0, -1 accordingly as per the perl cmp operator.
+
+=cut
+
+sub cmp
+{
+    my ($self, $name, $level, $a, $b) = @_;
+    my ($single, $multi, $pa, $sa, $ta, $pb, $sb, $tb, $i, $j, $k, $val, $c, $cs);
+
+    $self->build_sorts unless (defined $self->{'srt'}{$name}{' single'});
+    $single = $self->{'srt'}{$name}{' single'};
+    $multi = $self->{'srt'}{$name}{' multi'};
+    while ($i < length($a) || $k < length($b))
+    {
+        if ($i < length($a))
+        {
+            $c = ord(substr($a, $i, 1));
+            if ($single->[$c] eq "\xff\xff")
+            {
+                undef $val;
+                for ($j = 1; $j < length($a) - $i; $j++)
+                {
+                    my ($s) = substr($a, $i, $j);
+                    last unless defined $multi->{$s};
+                    $val = $multi->{$s};
+                }
+                $i += ($j == 1) ? 0 : $j - 2;
+            } else
+            { $val = $single->[$c]; }
+        }
+        else
+        { $val = "\000\000"; }
+        ($pa, $sa) = unpack("cc", $val);
+        
+        if ($k < length($b))
+        {
+            $c = ord(substr($b, $k, 1));
+            if ($single->[$c] eq "\xff\xff")
+            {
+                undef $val;
+                for ($j = 1; $j < length($b) - $k; $j++)
+                {
+                    my ($s) = substr($b, $k, $j);
+                    last unless (defined $multi->{$s});
+                    $val = $multi->{$s};
+                }
+                $k += $j - 1;
+            }
+            else
+            { $val = $single->[$c]; }
+        }
+        else
+        { $val = "\000\000"; }
+
+        ($pb, $sb) = unpack("cc", $val);
+        if ($level == 0)
+        { $c = $pa <=> $pb; }
+        
+        if (!$cs)
+        { $cs = ($sa <=> $sb); }
+        return $c if ($c != 0);
+    }
+    if ($level == 1)
+    { return $cs; }
+    else
+    { return 0; }
+}
+
+=head2 @tokens = $s->tokenize($name, $level, $ignore, $str)
+
+Returns an array of tokens that are sorting units. C<$ignore> says whether to
+remove characters ignored at C<$level> or lower from the output. For example,
+if 'a' were a primary character and "'" were a secondary character then
+
+  $s->tokenize('test', 0, 0, "a'") = ("a", "'")
+  $s->tokenize('test', 1, 0, "a'") = ("a'")
+  $s->tokenize('test', 0, 1, "a'") = ("a")
+  $s->tokenize('test', 1, 1, "a'") = ("a", "'")   # no tertiary chars to remove
+
+=cut
+
+sub tokenize
+{
+    my ($self, $name, $level, $ignore, $str) = @_;
+    my ($i, $j, $c, $single, $multi, $val, @key, @res, $oldi);
+
+    $single = $self->{'srt'}{$name}{' single'};
+    if (!defined $single)
+    {
+        $self->build_sorts;
+        $single = $self->{'srt'}{$name}{' single'};
+    }
+    $multi = $self->{'srt'}{$name}{' multi'};
+    for ($i = 0; $i < length($str); $i++)
+    {
+        $oldi = $i;
+        $c = ord(substr($str, $i, 1));
+        if ($single->[$c] eq "\xff\xff\xff\xff")
+        {
+            undef $val;
+            for ($j = 1; $j < length($str) - $i; $j++)
+            {
+                last unless defined $multi->{substr($str, $i, $j)};
+                $val = $multi->{substr($str, $i, $j)};
+            }
+            $i += ($j == 1) ? 0 : $j - 2;
+        } else
+        { $val = $single->[$c]; }
+        @key = unpack("ss", $val);
+        next if ($key[0] == 0 && $key[1] == 0);     # ignore ignored characters
+        if ($level == 1 && $key[0] == 0)
+        {
+            if ($ignore)
+            { next; }
+            else
+            { $res[-1] .= substr($str, $oldi, $i - $oldi + 1); }
+        }
+        else
+        { push (@res, substr($str, $oldi, $i - $oldi + 1)); }
+    }
+    return @res;
+}
 sub add_specials
 {
     my ($self) = @_;
     
     
-    while ($self->{'desc'} =~ m/\\(\S+)\s*=\s*
+    while ($self->{'desc'} =~ m/\\([^=\s]+)\s*(?:\=\s*)?
         (?:\"((?:\\.|[^"])*)\"
             |
            \'((?:\\.|[^'])*)\'

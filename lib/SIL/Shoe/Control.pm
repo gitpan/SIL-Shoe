@@ -44,7 +44,7 @@ sub new
     if (m/^\\\+(\S+)\s+(.*?)\s*$/o)
     { $self->{'name'} = $2; }
     else
-    { croak('Malformed database type file ($file)'); }
+    { croak("Malformed database type file ($file)"); }
     close ($fh);
     bless $self, $class;
 }

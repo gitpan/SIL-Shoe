@@ -25,7 +25,8 @@ The following methods are available:
 
 =cut
 
-$VERSION = "1.07";      # MJPH  21-FEB-2005     Add \_DateStampHasFourDigitYear field (' DateStamp' = 4)
+$VERSION = "1.08";      # MJPH  19-MAY-2006     Fix complex indexing for many keys in a record
+# $VERSION = "1.07";      # MJPH  21-FEB-2005     Add \_DateStampHasFourDigitYear field (' DateStamp' = 4)
 # $VERSION = "1.06";      # MJPH  20-JAN-2005     Fix multiline key fields
 # $VERSION = "1.05";      # MJPH  10-JUN-2004     Add md5 and line counts on indexing
 # $VERSION = "1.04";      # MJPH   3-APR-2003     Add auto key searching, md5, locational reading
@@ -68,6 +69,10 @@ given list.
 Indicates that records printed via printrecord should not have a following
 blank line.
 
+=item unicode
+
+Assume the file is UTF8 unicode data otherwise process as bytes
+
 =back
 
 =cut
@@ -79,10 +84,15 @@ sub new
     my $key = shift;
     my ($self, $fh);
 
+    my (%attrs) = @_;
+    foreach (keys %attrs) { $self->{" $_"} = $attrs{$_}; }
+
     if (ref $file)
     { $fh = $file; }
+    elsif ($self->{' unicode'})
+    { $fh = IO::File->new($file, "<:utf8") || return Carp::croak("Unable to open Shoebox file $file"); }
     else
-    { $fh = IO::File->new("< $file") || return Carp::croak("Unable to open Shoebox file $file"); }
+    { $fh = IO::File->new($file, "<:bytes") || return Carp::croak("Unable to open Shoebox file $file"); }
 
 
 # notice we can use fields starting with space for internals
@@ -93,8 +103,6 @@ sub new
     $self->{' thisloc'} = 0;            # where we are following the last ReadRecord
     $self->{' loc'} = 0;                # the location of the last findrecord
 
-    my (%attrs) = @_;
-    foreach (keys %attrs) { $self->{" $_"} = $attrs{$_}; }
 
     while ($_ = $fh->getline)
     {
@@ -111,6 +119,7 @@ sub new
         }
         elsif (m/^\\(\S+)/oi)
         { 
+            next if ($1 eq '_sh');
             $self->{' key'} = $1 unless $key;
             last; 
         }
@@ -193,7 +202,11 @@ sub index
     my ($file, $loc, $keyloc, $index, @val, %keys, $k);
     my ($val, $v, $lcount, $md5, $lloc, $lindex, $mindex);
     
-    unshift (@keys, $opts) unless (!defined $opts || ref($opts) eq 'HASH');
+    if (defined $opts && ref($opts) ne 'HASH')
+    {
+        unshift (@keys, $opts);
+        $opts = {};
+    }
     $keys[0] = $self->{' key'} unless ($keys[0]);
     %keys = map{$_, $k++} @keys;
     $file = $self->{' INFILE'};
@@ -227,9 +240,9 @@ sub index
             if (defined $keys{$k})
             {
                 my (@copy);
-                if (defined $val[0][$keys{$k}])
+                if (defined $val[0][$keys{$k}])     # side effect, defines @val
                 {
-                    foreach $v (@val)
+                    foreach $v (grep {$_->[$keys{$k}] eq $val[0][$keys{$k}]} @val)
                     { push(@copy, [@$v]); }
                     foreach $v (@copy)
                     { $v->[$keys{$k}] = $val; }
@@ -440,7 +453,7 @@ sub readrecord
                 if ($current_key =~ m/ /o)    # already got a long field name
                 {
                     $suff = $';
-                    $pref = $`;
+                    $pref = $`;               #'
                     $suff++;                  # incremement the final no.
                 }
                 else                          # set up the first value
@@ -454,7 +467,7 @@ sub readrecord
             push(@$flist, $current_key) if (defined $flist);
                                                         # add the field name to the list
         }
-        elsif (defined $current_key)          # a continuation line?
+        elsif (defined $current_key)           # a continuation line?
         {
             s/\s*$//o;                         # clear line final spaces
             s/^\s*//o if ($stripnl);           # perhaps strip initial ws
@@ -509,6 +522,21 @@ sub proc_record
 }
 
 
+=head2 $s->allof($key)
+
+Returns all occurrences of a given key, in field order
+
+=cut
+
+sub allof
+{
+    my ($self, $key) = @_;
+    my ($k) = qr/^$key(?:\s|$)/;
+
+    return map {$self->{$_}} sort grep {/$k/} keys %{$self};
+}
+
+
 =head2 $s->printrecord(\*FILE, @fieldlist)
 
 Prints out an SH record with fields in the given order. If $s->{' allfields'} is
@@ -533,7 +561,7 @@ sub printrecord
         if ($f =~ m/ /o)              # need to trim fieldname kludging
             { print $file "\\$` "; }
         else
-            { print $file "\\$f "; }
+            { print $file "\\" ."$f "; }
         print $file "$self->{$f}\n";
         }
     print $file "\n" unless $self->{' noblank'};  # print a blank line at the end of a record

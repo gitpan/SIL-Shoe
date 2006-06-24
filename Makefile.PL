@@ -1,25 +1,33 @@
 use ExtUtils::MakeMaker;
+# use inc::Module::Install;
 use IO::File;
 use Config;
 use Getopt::Std;
+
+do "./lib/SIL/Shoe.pm";
 
 getopts('e');
 
 # $opt_e - disable inclusion of encrem.pl in exe
 
-$VERSION = "1.24";
+#$VERSION = "1.30";
 
-$fversion = $VERSION;
+$fversion = $SIL::Shoe::VERSION;
 $fversion =~ s/\./_/og;
 
-@scripts = grep {!m/\./o && -f } glob("scripts/*");
+@scripts = grep {!m/\./o && !m/[~]$/o && -f } glob("Scripts/*");
 
 # incantation to enable MY::pm_to_blib later on
-push(@ExtUtils::MakeMaker::Overridable, qw(pm_to_blib)) if ($^O eq 'MSWin32');
+if ($^O eq 'MSWin32')
+{
+    push(@ExtUtils::MakeMaker::Overridable, qw(pm_to_blib));
+    @extras = (dist => { 'TO_UNIX' => 'perl -Mtounix -e "tounix(\"$(DISTVNAME)\")"' });
+}
 
 # we do this to avoid installing Make.pm
 %pms = map { my ($v) = $_; $v =~ s/^lib/\$(INST_LIB)/o; $_ => $v; }
-    (glob("lib/SIL/Shoe/*.pm"), glob("lib/SIL/*.pm"));
+    (glob("lib/SIL/Shoe/*.pm"), glob("lib/SIL/*.pm"), glob("lib/SIL/Shoe/Backend/*.pm"),
+     glob("lib/SIL/Shoe/Sort/*.pm"), glob("lib/Unicode/Collate/allkeys.txt"));
 
 $perlbin = $Config{'bin'};
 $fhi = IO::File->new("< ShUtils.isb") || die "Can't find ShUtils.isb";
@@ -40,15 +48,22 @@ $fho->close;
     
 WriteMakefile (
         NAME => "SIL::Shoe",
-        VERSION => $VERSION,
+        VERSION_FROM => "lib/SIL/Shoe.pm",
+#        VERSION => $VERSION,
         EXE_FILES => \@scripts,
         AUTHOR => "martin_hosken\@sil.org",
         ABSTRACT => "Shoebox support utilities",
         PREREQ_PM => {
-            'Encode::Registry' => 0
+            'Algorithm::Diff' => 0,
+            'Algorithm::Merge' => 0,
+            'Archive::Zip' => 0,
+            'Encode::Registry' => 0,
+            'Encode::TECkit' => 0,
+            'OpenOffice::OODoc' => 0,
+            'Unicode::Collate' => 0,
             },
         PM => {%pms},
-        dist => { 'TO_UNIX' => 'perl -Mtounix -e "tounix(\"$(DISTVNAME)\")"' }
+        @extras
     );
 
 if ($^O eq 'MSWin32') {
@@ -75,14 +90,14 @@ EOT
 
 sub MY::postamble
 {
-    my (@files) = map {m|scripts/(.*)$|o; $1;} @scripts;
+    my (@files) = map {m|Scripts/(.*)$|oi; $1;} @scripts;
     my ($res, $fh, $files);
     
-    $files = join (' ', map {m|scripts/(.*)$|o; "$1.bat"} @scripts);
-    $files =~ s/addpath\s*//o;     # remove addpath since don't need a .bat
+    $files = join (' ', map {m|Scripts/(.*)$|oi; "$1.bat"} @scripts);
+    $files =~ s/addpath\.bat\s*//o;     # remove addpath since don't need a .bat
     $files .= " encrem.bat" unless $opt_e;
     $fh = IO::File->new("> addbats.pl") || die "Can't create addbats.pl";
-    
+
     $fh->print(<<"EOT");
 #! perl
 foreach \$f (qw($files))
@@ -105,14 +120,24 @@ EOT
     
     push (@scripts, "addbats.pl");
     push (@scripts, "$perlbin/encrem") unless $opt_e;
+
+	if ($^O eq 'MSWin32')
+	{
+		require Win32::TieRegistry;
+		Win32::TieRegistry->import (Delimiter=>"/") ;
+		$compile = $Registry->{'Classes/InnoSetupScriptFile/shell/Compile/command//'};
+		$compile =~ s/\s*"?%1"?.*$//;
+		$compile = "start \"compile\" /wait $compile";
+	}
+    
     $res .= "exe : ShUtils_$fversion.exe\n\n";
 
-    $res .= "ShUtils_$fversion.exe : scripts\\shutils.par\n";
-    $res .= "\t\\progs\\inno_setup\\compil32.exe /cc ShUtils.iss\n\n";
+    $res .= "ShUtils_$fversion.exe : Scripts\\shutils.par\n";
+    $res .= "\t$compile ShUtils.iss\n\n";
     
-    $res .= "scripts\\shutils.par : ";
+    $res .= "Scripts\\shutils.par : ";
     $res .= join(' ', @scripts);
-    $res .= "\n\tpp -B -p -o scripts\\shutils.par " . join(' ', @scripts);
+    $res .= "\n\tpp -B -p -o Scripts\\shutils.par -a lib\\Unicode\\Collate\\allkeys.txt -M SIL::Encode_all " . join(' ', @scripts);
     $res .= "\n\n";
     
     $res;

@@ -5,7 +5,7 @@
 
 [Setup]
 AppName=SIL Shoebox Utilities
-AppVerName=SIL Shoebox Utilities 1.24
+AppVerName=SIL Shoebox Utilities 
 AppPublisher=SIL International
 AppPublisherURL=http://www.sil.org/computing
 ; AppSupportURL=http://www.sil.org/computing
@@ -15,7 +15,7 @@ DefaultGroupName=Shoebox Utilities
 ; uncomment the following line if you want your installation to run on NT 3.51 too.
 ; MinVersion=4,3.51
 AdminPrivilegesRequired=yes
-OutputBaseFilename=SHUtils_1_24
+OutputBaseFilename=SHUtils_1_31
 OutputDir=.
 ; DisableProgramGroupPage=yes
 DisableStartupPrompt=yes
@@ -28,12 +28,12 @@ Name: "{app}\docs"
 
 [Files]
 Source: "scripts\shutils.par"; DestDir: "{app}"; CopyMode: alwaysoverwrite
-Source: "D:\progs\perl\bin\parl.exe"; DestDir: "{app}"; CopyMode: alwaysoverwrite;
+Source: "/usr/bin\parl.exe"; DestDir: "{app}"; CopyMode: alwaysoverwrite;
 Source: "docs\Manual.pdf"; DestDir: "{app}\docs"; CopyMode: alwaysoverwrite
 Source: "docs\team_working.pdf"; DestDir: "{app}\docs"; CopyMode: alwaysoverwrite
 Source: "docs\shoebox.xsl"; DestDir: "{app}\docs"; CopyMode: alwaysoverwrite
 Source: "scripts\zvs.bat"; DestDir: "{app}"; CopyMode: alwaysoverwrite
-; Source: "D:\progs\perl\bin\Perl56.dll"; DestDir: "{sys}"; Flags: sharedfile;
+; Source: "/usr/bin\Perl56.dll"; DestDir: "{sys}"; Flags: sharedfile;
 
 
 [Icons]

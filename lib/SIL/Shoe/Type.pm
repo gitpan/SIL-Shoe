@@ -95,7 +95,7 @@ sub add_specials
     foreach $t (keys %{$self->{'mkr'}})
     {
         next unless defined ($self->{'mkr'}{$t}{'desc'});
-        while ($self->{'mkr'}{$t}{'desc'} =~ m/\\(\S+)\s*=\s*
+        while ($self->{'mkr'}{$t}{'desc'} =~ m/\\(\S+)\s*(?:=\s*)?
             (?:\"((?:\\.|[^"])*)\"
                 |
                \'((?:\\.|[^'])*)\'
