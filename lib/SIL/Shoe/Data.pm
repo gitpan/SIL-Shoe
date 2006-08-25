@@ -25,7 +25,9 @@ The following methods are available:
 
 =cut
 
-$VERSION = "1.08";      # MJPH  19-MAY-2006     Fix complex indexing for many keys in a record
+$VERSION = "1.10";      # MJPH  14-AUG-2006     Add field methods
+# $VERSION = "1.09";      # MJPH  30-JUN-2006     Add printheader
+# $VERSION = "1.08";      # MJPH  19-MAY-2006     Fix complex indexing for many keys in a record
 # $VERSION = "1.07";      # MJPH  21-FEB-2005     Add \_DateStampHasFourDigitYear field (' DateStamp' = 4)
 # $VERSION = "1.06";      # MJPH  20-JAN-2005     Fix multiline key fields
 # $VERSION = "1.05";      # MJPH  10-JUN-2004     Add md5 and line counts on indexing
@@ -72,6 +74,10 @@ blank line.
 =item unicode
 
 Assume the file is UTF8 unicode data otherwise process as bytes
+
+=item nointernal
+
+Do not keep track of fields and their positions within the record
 
 =back
 
@@ -400,6 +406,11 @@ sub readrecord
     my (@f) = keys %$self;
     foreach (@f) { delete $self->{$_} unless (m/^\s/oi); }
     @$flist = () if (defined $flist);
+    unless ($self->{' nointernal'})
+    {
+        $self->{' field_list'} = [];
+        $self->{' field_lkup'} = {};
+    }
 
     $file->seek($loc, 0);
     while($_ = $file->getline)
@@ -409,6 +420,11 @@ sub readrecord
         {
             $self->{$key} = $1;
             push(@{$flist}, $key) if (defined $flist);
+            unless ($self->{' nointernal'})
+            {
+                push (@{$self->{' field_list'}}, $key);
+                $self->{' field_lkup'}{$key} = 0;
+            }
             $foundkey = 1;
             last;
         }
@@ -465,6 +481,11 @@ sub readrecord
             }                                           # name
             $self->{$current_key} = $data;              # store the value
             push(@$flist, $current_key) if (defined $flist);
+            unless ($self->{' nointernal'})
+            {
+                push (@{$self->{' field_list'}}, $current_key);
+                $self->{' field_lkup'}{$current_key} = $foundkey++;
+            }
                                                         # add the field name to the list
         }
         elsif (defined $current_key)           # a continuation line?
@@ -536,6 +557,100 @@ sub allof
     return map {$self->{$_}} sort grep {/$k/} keys %{$self};
 }
 
+
+=head2 $s->insert_field($offset, $field)
+
+Inserts a field into the field list at the given offset. Returns the new name
+of the field (to account for multiple identical fields).
+
+=cut
+
+sub insert_field
+{
+    my ($self, $ind, $field) = @_;
+    my ($hash) = $self->{' field_lkup'};
+    my ($h);
+    
+    while (defined $hash->{$field}) { $field =~ s/(\s\d*)?$/" " . ($1 + 1)/oe; }
+    splice(@{$self->{' field_list'}}, $ind, 0, $field);
+    foreach $h (keys %$hash)
+    { $hash->{$h}++ if ($hash->{$h} >= $ind); }
+    $hash->{$field} = $ind;
+    return $field;
+}
+
+
+=head2 $s->delete_field($field)
+
+Deletes a particular field from the field list (note not all occurrences, just
+the specific field)
+
+=cut
+
+sub delete_field
+{
+    my ($self, $field) = @_;
+    my ($hash) = $self->{' field_lkup'};
+    my ($ind) = defined $hash->{$field} ? $hash->{$field} : return;
+    my ($h);
+
+    splice(@{$self->{' field_list'}}, $ind, 1);
+    foreach $h (keys %$hash)
+    { $hash->{$h}-- if ($hash->{$h} > $ind); }
+    delete $hash->{$ind};
+}
+
+
+=head2 $s->rename_field($old, $new)
+
+Renames all occurrences of old fields to new ones changing the database as well
+
+=cut
+
+sub rename_field
+{
+    my ($self, $old, $new) = @_;
+    my ($k);
+
+    foreach $k (grep {m/^$old(?:\s|$)/} @{$self->{' field_list'}})
+    {
+        my ($t) = "$k";
+        my ($newf) = $new;
+        while (defined $self->{' field_lkup'}{$newf}) { $newf =~ s/(\s\d*)?$/" ". ($1 + 1)/oe; }
+        $self->{$newf} = delete $self->{$t};
+        $self->{' field_list'}[$self->{' field_lkup'}{$t}] = $newf;
+        $self->{' field_lkup'}{$newf} = delete $self->{' field_lkup'}{$t};
+    }
+}
+
+
+=head2 $s->offsetof_field($field)
+
+Returns the field index of a particular field
+
+=cut
+
+sub offsetof_field
+{
+    my ($self, $field) = @_;
+    return $self->{' field_lkup'}{$field};
+}
+
+
+=head2 $s->printheader(\*FILE)
+
+Prints out the header information
+
+=cut
+
+sub printheader
+{
+    my ($sh, $file) = @_;
+
+    printf $file "\\_sh %s  %d  %s\n", $sh->{' Version'}, $sh->{' CSum'}, $sh->{' Type'};
+    print $file "\\_DateStampHasFourDigitYear\n" if ($sh->{' DateStamp'} == 4);
+    print $file "\n";
+}
 
 =head2 $s->printrecord(\*FILE, @fieldlist)
 

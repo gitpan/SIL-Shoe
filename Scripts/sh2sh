@@ -4,7 +4,9 @@
 # for where to go from here. Someone could take the output from this automated
 # solution and use XSLT to re-organise according to a different DTD.
 
-$VERSION = '1.1.1'; #   MJPH    22-APR-2005     Add \codepage xxx.tec direct TECkit support
+$VERSION = '1.2.1'; #   MJPH    30-JUN-2006     Fix normalising and unicode
+# $VERSION = '1.2';   #   MJPH    26-JUN-2006     Add -n (normalising)
+# $VERSION = '1.1.1'; #   MJPH    22-APR-2005     Add \codepage xxx.tec direct TECkit support
 # $VERSION = '1.1.0'; #   MJPH    21-JAN-2005     Add interlinear text support and -t (move -t to -f)
 # $VERSION = '1.0.2'; #   MJPH     8-JUN-2004     Add charset support
 # $VERSION = '1.0.1'; #   MJPH     5-MAR-2003     Add system codepage support
@@ -12,13 +14,14 @@ $VERSION = '1.1.1'; #   MJPH    22-APR-2005     Add \codepage xxx.tec direct TEC
 
 use SIL::Shoe::Settings;
 use SIL::Shoe::Data;
-use Encode qw(_utf8_on _utf8_off);
+use Encode qw(_utf8_on _utf8_off decode_utf8 encode_utf8);
 use Encode::Registry;
 use Encode::TECkit;
+use Unicode::Normalize 'normalize';
 use File::Spec;
 use Getopt::Std;
 
-getopts("bc:e:f:s:t:");
+getopts("bc:e:f:n:s:t:");
 
 %charsets = (
     0 => 1252,      # ansi - Western European
@@ -58,6 +61,7 @@ Converts Shoebox data to Shoebox converting to Unicode as it goes.
     -c codepage     Set default codepage conversion, otherwise none
     -e enc,enc      Add Encoding:: subsets in Perl 5.8.1
     -f type         Force database type
+    -n normalform   normalize unicode text to D,C,KD,KC form
     -s dir          Directory to find .typ files in [.]
     -t type         Generate Toolbox database of given type
     
@@ -129,10 +133,12 @@ foreach $x (@{$typef->{'intprc'}})
 }
 $lastrow = $i - 1;
 
+$opt_t ||= $s->{' Type'} if ($opt_n);
+
 if ($opt_t)
 {
     printf "\\_sh %s  %d  %s\n", $s->{' Version'}, $s->{' CSum'}, $opt_t;
-    print "\\_DateStampeHasFourDigitYear\n" if ($s->{' DateStamp'} == 4);
+    print "\\_DateStampHasFourDigitYear\n" if ($s->{' DateStamp'} == 4);
     print "\n";
 }
 
@@ -189,6 +195,10 @@ sub convert
 {
     my ($str, $marker) = @_;
     
+    if ($opt_n and $lang = $settings->lang($typef->{'mkr'}{$marker}{'lng'})
+               and defined $lang->{'UnicodeLang'})
+    { return normalize($opt_n, decode_utf8($str)); }
+
     unless ($lang = $settings->lang($typef->{'mkr'}{$marker}{'lng'}))
     { $enc = $defenc; }
     elsif (defined $lang->{'encoding'})
@@ -241,7 +251,7 @@ sub build_pos
     {
         $substr = $1;
         $match = $&;
-        $str = $';
+        $str = $';      #'
         $new = SIL::Shoe::Interlin::Node->new(
             text => $substr,
             num => $num,
@@ -389,6 +399,7 @@ sub mark_children
     {
         # find the spanning range in the children based on starting offsets
         $cfirst = $first->{'children'}[$cind][0];
+        next unless $cfirst;
         for ($p = $first; defined $p && $p ne $last->{'next'}; $p = $p->{'next'})
         {
             foreach $c (@{$p->{'children'}[$cind]})

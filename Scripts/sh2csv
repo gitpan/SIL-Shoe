@@ -4,6 +4,8 @@ use SIL::Shoe::Data;
 use Getopt::Std;
 use Pod::Usage;
 
+$VERSION='0.1';     #   MJPH    20-JUN-2006     original
+
 getopts("f:hk:o:u");
 
 unless (defined $ARGV[0] && defined $opt_f)

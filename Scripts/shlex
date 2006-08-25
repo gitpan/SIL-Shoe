@@ -11,7 +11,8 @@ use SIL::Shoe::Backend::html;
 use SIL::Shoe::Backend::openoffice;
 use Pod::Usage;
 
-$VERSION="0.6";     # MJPH      21-JUN-2006     Add unique attribute
+$VERSION="0.6.1";   # MJPH      26-JUN-2006     Fix indexing
+# $VERSION="0.6";     # MJPH      21-JUN-2006     Add unique attribute
 # $VERSION="0.5";     # MJPH      12-JUN-2006     Bottom to top rewrite with full nodes
 # $VERSION="0.2";     #   MJPH    10-JUN-2006     Fix sorting
 # $VERSION="0.1";     #   MJPH    25-MAY-2006     Original
@@ -197,7 +198,7 @@ sub byMultiLevel
         if (!$t)
         { $res = $x[$i] cmp $y[$i]; }
         elsif ($t->isa('SIL::Shoe::Sort::numeric'))
-        { $res = $x[$i] <=> $y[$i]; }
+        { $res = $t->cmp($x[$i], $y[$i]); }
         elsif (($l = $t->num_fields) > 1)
         {
             $res = $t->cmp(join("\000", $x[$i .. $i + $l - 1]),
@@ -292,15 +293,18 @@ sub make_nodeset
         my (@keys);
         foreach $n (@{$self->{'nodes'}})
         {
-            my ($list, $nlist);
+            my (@list);
             foreach $k (split(' ', $info->{'keys'}))
             {
                 foreach $v (@{$n->[4]{$k}})
-                { push (@{$nlist}, map {[@{$_}, $v]} @{$list}); }
-                $list = $nlist;
-                $nlist = [];
+                {
+                    if (scalar @list)
+                    { foreach (@list) { push (@{$_}, $v); } }
+                    else
+                    { push (@list, [$v]); }
+                }
             }
-            push (@keys, map {join("\000", @{$_})} @{$list});
+            push (@keys, map {join("\000", @{$_})} @list);
         }
         $res = $info->{'world'}{'indices'}{$info->{'index'}}->make_nodeset($self, $info, $info->{'unique'}, @keys);
         $res->{'count'} = scalar @{$res->{'nodes'}};

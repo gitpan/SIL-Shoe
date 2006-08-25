@@ -1,6 +1,8 @@
 package SIL::Shoe;
 
-$VERSION = 1.31;    #   MJPH    20-JUN-2006     add shlex, sh2csv, csv2sh
+$VERSION = 1.33;    #   MJPH    24-AUG-2006     add sh2odt
+# $VERSION = 1.32;    #   MJPH    30-JUN-2006     fix shlex index, add sh2sh -n
+# $VERSION = 1.31;    #   MJPH    20-JUN-2006     add shlex, sh2csv, csv2sh
 
 =head1 NAME
 

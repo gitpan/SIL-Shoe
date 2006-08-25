@@ -3,6 +3,9 @@
 use Getopt::Std;
 use Pod::Usage;
 
+$VERSION='0.2';     #   MJPH    27-JUN-2006     Don't output blank sfms
+# $VERSION='0.1';     #   MJPH    20-JUN-2006     original
+
 getopts('ho:u');
 
 if ($opt_h)
@@ -34,8 +37,8 @@ while(<>)
     { print "\n"; }
     else
     { $gap = 1; }
-    print join("\n", map {"\\$head[$i++] $_"} @dat);
-    print "\n";
+    for ($i = 0; $i < scalar @dat; $i++)
+    { print "\\$head[$i] $dat[$i]\n" if ($head[$i]); }        # don't print blank sfms
 }
 
 sub get_csv

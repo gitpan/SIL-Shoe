@@ -40,6 +40,7 @@ sub new
     $self->{' INFILE'} = $fh;
     $self->{' fname'} = $file;
     open($fh, "$file") and ($_ = <$fh>);
+    s/^\xEF\xBB\xBF//o;        # BOM in UTF8
     chomp;
     if (m/^\\\+(\S+)\s+(.*?)\s*$/o)
     { $self->{'name'} = $2; }
@@ -82,6 +83,7 @@ sub parse
     {
 #        chomp;
         s/\s+$//o;
+        s/^\xEF\xBB\xBF//o;
         next unless $_ ne "";
         if (m/^\\\-(.*?)\s*$/oi)
         {
