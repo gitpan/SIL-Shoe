@@ -27,7 +27,7 @@ if ($^O eq 'MSWin32')
 # we do this to avoid installing Make.pm
 %pms = map { my ($v) = $_; $v =~ s/^lib/\$(INST_LIB)/o; $_ => $v; }
     (glob("lib/SIL/Shoe/*.pm"), glob("lib/SIL/*.pm"), glob("lib/SIL/Shoe/Backend/*.pm"),
-     glob("lib/SIL/Shoe/Sort/*.pm"), glob("lib/Unicode/Collate/allkeys.txt"));
+     glob("lib/SIL/Shoe/Sort/*.pm"), glob("lib/Unicode/Collate/allkeys.txt"), glob("lib/Text/*.pm"));
 
 $perlbin = $Config{'bin'};
 $fhi = IO::File->new("< ShUtils.isb") || die "Can't find ShUtils.isb";
@@ -60,7 +60,9 @@ WriteMakefile (
             'Encode::Registry' => 0,
             'Encode::TECkit' => 0,
             'OpenOffice::OODoc' => 0,
+            'Pod::Usage' => 0,
             'Unicode::Collate' => 0,
+            'Image::Size' => 0,
             },
         PM => {%pms},
         @extras

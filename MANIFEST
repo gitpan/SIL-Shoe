@@ -1,6 +1,4 @@
 addbats.pl
-Build
-Build.PL
 docs/manual.html
 docs/Manual.pdf
 docs/Manual.rtf
@@ -24,12 +22,13 @@ lib/SIL/Shoe/Sort/numeric.pm
 lib/SIL/Shoe/Sort/shoe.pm
 lib/SIL/Shoe/Sort/unicode.pm
 lib/SIL/Shoe/Type.pm
+lib/SIL/Shoe/XPath.pm
+lib/Text/LangTag.pm
 lib/Unicode/Collate/allkeys.txt
+Makefile.old
 Makefile.PL
 MANIFEST			This list of files
 MANIFEST.SKIP
-META.yml
-pm_to_blib
 readme.txt
 Scripts/addpath
 Scripts/csv2sh
@@ -44,6 +43,7 @@ Scripts/shdiffn
 Scripts/shed
 Scripts/shintr
 Scripts/shlex
+Scripts/xml2sh
 Scripts/zipdiff
 Scripts/zipmerge
 Scripts/zippatch
@@ -51,8 +51,10 @@ Scripts/zvs.bat
 ShUtils.isb
 ShUtils.iss
 t/dict.xml
+t/dict_base.odt
 t/dict_base.xml
 t/text.xml
+t/text_base.odt
 t/text_base.xml
 t/thai.t
 t/Thai/Date.cct
@@ -68,3 +70,4 @@ t/Thai/Text.typ
 t/Thai/Thai.prj
 t/Thai/ThaiUnicode.lng
 t/Thai/THAIUPV.CCT
+META.yml                                 Module meta-data (added by MakeMaker)

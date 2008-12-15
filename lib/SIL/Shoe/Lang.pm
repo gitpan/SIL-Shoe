@@ -315,6 +315,26 @@ sub tokenize
     }
     return @res;
 }
+
+sub lang_tag
+{
+    my ($self) = @_;
+    return $self->{'langtag'};
+}
+
+sub script_tag
+{
+    my ($self) = @_;
+    my (@t) = split('-', lc($self->{'langtag'}));
+    my (@res);
+
+    foreach (@t)
+    {
+        push(@res, $_) if (length($_) == 4 || m/^fon/o);
+    }
+    return join("-", @res);
+}
+
 sub add_specials
 {
     my ($self) = @_;

@@ -1,5 +1,5 @@
 #! perl
-foreach $f (qw(csv2sh.bat sh2csv.bat sh2odt.bat sh2sh.bat sh2xml.bat sh_rtf.bat shadd.bat shdiff3.bat shdiffn.bat shed.bat shintr.bat shlex.bat zipdiff.bat zipmerge.bat zippatch.bat encrem.bat))
+foreach $f (qw(csv2sh.bat sh2csv.bat sh2odt.bat sh2sh.bat sh2xml.bat sh_rtf.bat shadd.bat shdiff3.bat shdiffn.bat shed.bat shintr.bat shlex.bat xml2sh.bat zipdiff.bat zipmerge.bat zippatch.bat encrem.bat))
 {
     if ($ARGV[0] eq '-r')
     {

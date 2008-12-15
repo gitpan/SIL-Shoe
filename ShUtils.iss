@@ -15,7 +15,7 @@ DefaultGroupName=Shoebox Utilities
 ; uncomment the following line if you want your installation to run on NT 3.51 too.
 ; MinVersion=4,3.51
 AdminPrivilegesRequired=yes
-OutputBaseFilename=SHUtils_1_33
+OutputBaseFilename=SHUtils_1_37
 OutputDir=.
 ; DisableProgramGroupPage=yes
 DisableStartupPrompt=yes

@@ -1,5 +1,7 @@
 #!/usr/bin/perl
 
+$VERSION = '1.1';   #   MJPH     05-SEP-2006     Indent interlinear block to ease cursor handling
+# $VERSION = '1.0.1'; #   MJPH     26-AUG-2006     Add font-asian, font-complex stuff
 # $VERSION = '1.0';   #   MJPH     25-AUG-2006     Original
 
 use SIL::Shoe::Settings;
@@ -8,9 +10,22 @@ use Encode qw(_utf8_on decode_utf8 encode_utf8);
 use Encode::Registry;
 use File::Spec;
 use Getopt::Std;
-use Archive::Zip;
+use Archive::Zip qw(:CONSTANTS);
+use Pod::Usage
 
-getopts("c:e:ms:");
+getopts("c:e:hms:");
+
+if ($opt_h)
+{
+    pod2usage( -verbose => 2);
+    exit;
+}
+
+unless (defined $ARGV[0])
+{
+    pod2usage(1);
+    exit;
+}
 
 unless (defined $ARGV[0])
 {
@@ -21,7 +36,7 @@ Converts Shoebox data to OpenOffice format
 
     -c codepage     Set system codepage for this process
     -e enc,enc      Add Encoding:: subsets in Perl 5.8.1
-    -m              MDF style output with character marker support
+    -m              MDF character marker support
     -s dir          Directory to find .typ files in [.]
     
 If outfile is missing, it is created as the input file with extension replaced
@@ -85,8 +100,8 @@ $settings = SIL::Shoe::Settings->new($opt_s) || die "Unable to read settings dir
 $s = SIL::Shoe::Data->new($ARGV[0], undef, nostripnl => 1)
         || die "Can't open $ARGV[0]";
 $zip = Archive::Zip->new();
-$zip->addDirectory('META-INF');
-$zip->addString(<<'EOT', 'META-INF/manifest.xml');
+$zip->addDirectory('META-INF')->desiredCompressionMethod(COMPRESSION_DEFLATED);
+$zip->addString(<<'EOT', 'META-INF/manifest.xml')->desiredCompressionMethod(COMPRESSION_DEFLATED);
 <?xml version="1.0"?>
 <!DOCTYPE manifest:manifest PUBLIC "-//OpenOffice.org//DTD Manifest 1.0//EN" "Manifest.dtd">
 <manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0">
@@ -159,7 +174,7 @@ $outfile .= <<'EOT';
     fo:hyphenation-remain-char-count="2" fo:hyphenation-push-char-count="2"/>
   </style:default-style>
   <style:style style:name="interlinear-block" style:display-name="interlinear-block" style:family="paragraph">
-   <style:paragraph-properties fo:margin-top="0in" fo:margin-bottom="6pt" />
+   <style:paragraph-properties fo:margin-top="0in" fo:margin-bottom="6pt" fo:margin-left="6pt"/>
   </style:style>
   <style:style style-name="interlinear-line" style:display-name="interlinear-line" style:family="paragraph">
    <style:paragraph-properties fo:margin-top="0in" fo:margin-bottom="0in"/>
@@ -208,9 +223,10 @@ foreach $m (sort keys %{$typef->{'mkr'}})
     $fname = decode_utf8($fname);
 
     $outfile .= "   <style:text-properties style:use-window-font-color=\"true\" fo:font-family=\"$fname\"
-fo:font-size=\"$fntmkr->{'Size'}\"";
-    $outfile .= " fo:font-style=\"italic\"" if (defined $fntmkr->{'Italic'});
-    $outfile .= " fo:font-weight=\"bold\"" if (defined $fntmkr->{'Bold'});
+fo:font-size=\"$fntmkr->{'Size'}pt\" style:font-family-asian=\"$fname\" style:font-family-complex=\"$fname\"
+style:font-size-asian=\"$fntmkr->{'Size'}pt\" style:font-size-complex=\"$fntmkr->{'Size'}pt\"";
+    $outfile .= " fo:font-style=\"italic\" style:font-style-asian=\"italic\" style:font-style-complex=\"italic\"" if (defined $fntmkr->{'Italic'});
+    $outfile .= " fo:font-weight=\"bold\" style:font-weight-asian=\"bold\" style:font-weight-complex=\"bold\"" if (defined $fntmkr->{'Bold'});
     $outfile .= " fo:color=\"rgb($fntmkr->{'rgbColor'})\"" if (defined $fntmkr->{'rgbColor'} && $fntmkr->{'rgbColor'} ne '0,0,0');
     $outfile .= "/>\n  </style:style>\n";
 }
@@ -290,7 +306,7 @@ while ($s->readrecord(\@fields))
 }
 $outfile .= "  </office:text>\n </office:body>\n</office:document>\n";
 
-$zip->addString(\$outfile, "content.xml");
+$zip->addString(\$outfile, "content.xml")->desiredCompressionMethod(COMPRESSION_DEFLATED);
 $zip->writeToFileNamed($ARGV[1]);
 
 sub make_dtd
@@ -308,6 +324,7 @@ sub make_dtd
             {
                 $tree->{$mk}{'interlinid'} = $lcount;
                 $tree->{'interlinear block'}{'markers'}[$lcount++] = $mk;
+                $tf->{'mkr'}{$mk}{'CharStyle'} = 'text';        # force interlinear block lines to be char style
             }
         }
 #        $tree->{$k->{'mkrTo'}}{'interlin_parent'} = $tree->{$k->{'mkrFrom'}}{'interlinid'};
@@ -742,3 +759,125 @@ sub le
     }
     return 0;
 }
+
+__END__
+
+=head1 TITLE
+
+sh2odt - convert Shoebox/Toolbox to OpenOffice .odt file
+
+=head1 SYNOPSIS
+
+    sh2odt [-s settings_dir] [-c codepage] [-e encs] [-m] infile [outfile]
+
+Converts Shoebox data to OpenOffice format
+
+=head1 OPTIONS
+
+    -c codepage     Set system codepage for this process
+    -e enc,enc      Add Encoding:: subsets in Perl 5.8.1
+    -m              MDF character marker support
+    -s dir          Directory to find .typ files in [.]
+    
+If outfile is missing, it is created as the input file with extension replaced
+by .odt. This allows a user to drop a data file on a shortcut.
+
+=head1 DESCRIPTION
+
+sh2odt converts a Shoebox/Toolbox file into an OpenOffice .odt file. To do
+this it needs to convert data to Unicode. It also converts interlinear
+text into character level frames whereby each frame contains a single
+interlinear block and is treated by the system as if it were a character.
+It can then be copied and pasted into tables, reflowed like normal text, etc.
+
+Using sh2odt involves two aspects: preparing for conversion in terms of
+giving information about encoding conversion and even XML template output; and
+running the program, knowing what command line option does what.
+This manual is not a tutorial and so we list all the details with little or
+no indication of relative priority.
+
+=head2 Running sh2odt
+
+Here we list the various command line options and give further details on each
+
+=over 4
+
+=item -c
+
+Specifies the default codepage to be used when converting data. In effect it
+specifies that sh2xml should act as though it were running on a system with the
+given default codepage. This means that data in languages with no given encoding
+conversion will be converted using this codepage.
+
+=item -e
+
+Perl has internal support for a large number of industry standard encodings. This
+option specifies which sets to pull in apart from the default set. Values include
+
+  Byte - standard ISO 8859 type single byte encodings
+  CN   - Continental China encodings including cp 936, GB 12345 and GB 2312
+  JP   - Japanese encodings including cp 932 and ISO 2022
+  KR   - Korean encodings including cp 949
+  TW   - Taiwanese encodings including cp 950
+  HanExtra - more Chinese encodings including GB 18030
+  JIS2K - More Japanese encodings
+  Ebcdic - surely not!
+  Symbols - various symbol encodings
+
+See man Encode::Supported or the corresponding module documentation for details of
+what is supported on your Perl installation.
+
+=item -m
+
+MDF and perhaps other schemas support the ability to use inline markers of the
+form C<|mk{>I<text>C<}>. sh2odt has the ability to work with these schemes. Data
+marked in such a way is output with a character style of the given marker's
+name.
+
+=item -s
+
+sh2xml requires access to information about the structure of the database
+and language information. This is held in files in the same directory as the
+C<.prj> project file used when running Shoebox/Toolbox.
+
+=back
+
+=head2 Preparing for Conversion
+
+The basic need is to be able to specify how to convert text in a particular
+language into Unicode. This can be done by specifying a conversion mapping
+in each language file. Shoebox and Toolbox do not have a UI for specifying
+such conversion information, so we add information to the options/description
+field. The codepage specification takes the form:
+
+  \codepage = value
+
+The specification needs to be on a line on its own. The I<value> can take a
+number of forms.
+
+=over 4
+
+=item I<name>
+
+A mapping name either from the set of names supported by the Perl Encode
+module, or specified in an SIL Converters repository.
+
+=item I<filename>.tec
+
+The path and filename of a TECkit binary mapping file. The path is
+relative to the settings directory.
+
+=item none
+
+No mapping should be done. The data is assumed to be in UTF-8 encoding.
+
+=back
+
+sh2odt creates styles for each marker and outputs the font used for
+each marker. If the data has been converted, then the font isn't
+appropriate to that encoding any more. To specify an appropriate
+font it is possible to specify this in the description field using
+
+  \unicode_font = value
+
+Where I<value> is the font name to be used for the Unicode form of the data.

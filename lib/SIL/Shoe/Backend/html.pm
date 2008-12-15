@@ -112,6 +112,13 @@ sub output_space
     $self->{'ofh'}->print("&#xa0;") unless ($self->{'start_para'});
 }
 
+sub output_newline
+{
+    my ($self) = @_;
+
+    $self->{'ofh'}->print("<br/>\n") unless ($self->{'start_para'});
+}
+
 sub output
 {
     my ($self, $text) = @_;
@@ -126,6 +133,11 @@ sub char_style
     
     $self->{'ofh'}->print("<span class='$style'>$text</span>");
     $self->{'start_para'} = 0;
+}
+
+sub picture
+{
+    my ($self, $style, $fname) = @_;
 }
 
 sub finish

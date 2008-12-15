@@ -95,15 +95,17 @@ sub add_specials
     foreach $t (keys %{$self->{'mkr'}})
     {
         next unless defined ($self->{'mkr'}{$t}{'desc'});
-        while ($self->{'mkr'}{$t}{'desc'} =~ m/\\(\S+)\s*(?:=\s*)?
-            (?:\"((?:\\.|[^"])*)\"
-                |
-               \'((?:\\.|[^'])*)\'
-                |
-               (\S+))/ogx)
-            {
-                $self->{'mkr'}{$t}{$1} = $2 || $3 || $4;
-            }
+        while ($self->{'mkr'}{$t}{'desc'} =~ m/\\(\S+)\s*([^\\]*)/ogsx)
+        { $self->{'mkr'}{$t}{$1} = $2; }
+    }
+    while ($self->{'desc'} =~ m/\\(\S+)\s*([^\\]*)/ogsx)
+    {
+        if (ref $self->{$1})
+        { push (@{$self->{$1}}, $2); }
+        elsif ($self->{$1})
+        { $self->{$1} = [$self->{$1}, $2]; }
+        else
+        { $self->{$1} = $2; }
     }
     $self;
 }

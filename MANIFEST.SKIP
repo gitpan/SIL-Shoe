@@ -18,3 +18,5 @@ CVS/
 \.par
 \.svn/
 ^dev/
+^pm_to_blib$
+

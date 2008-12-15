@@ -4,7 +4,10 @@
 # for where to go from here. Someone could take the output from this automated
 # solution and use XSLT to re-organise according to a different DTD.
 
-$VERSION = '1.2.1'; #   MJPH    30-JUN-2006     Fix normalising and unicode
+$VERSION = '1.2.4'; #   MJPH    21-SEP-2007     Add documentation for -t %T
+# $VERSION = '1.2.3'; #   MJPH    22-SEP-2006     Add documentation
+# $VERSION = '1.2.2'; #   MJPH    30-JUN-2006     Add normalising for normal conversion
+# $VERSION = '1.2.1'; #   MJPH    30-JUN-2006     Fix normalising and unicode
 # $VERSION = '1.2';   #   MJPH    26-JUN-2006     Add -n (normalising)
 # $VERSION = '1.1.1'; #   MJPH    22-APR-2005     Add \codepage xxx.tec direct TECkit support
 # $VERSION = '1.1.0'; #   MJPH    21-JAN-2005     Add interlinear text support and -t (move -t to -f)
@@ -14,14 +17,15 @@ $VERSION = '1.2.1'; #   MJPH    30-JUN-2006     Fix normalising and unicode
 
 use SIL::Shoe::Settings;
 use SIL::Shoe::Data;
-use Encode qw(_utf8_on _utf8_off decode_utf8 encode_utf8);
+use Encode qw(_utf8_on _utf8_off decode_utf8 encode_utf8 find_encoding);
 use Encode::Registry;
 use Encode::TECkit;
 use Unicode::Normalize 'normalize';
 use File::Spec;
 use Getopt::Std;
+use Pod::Usage;
 
-getopts("bc:e:f:n:s:t:");
+getopts("bc:e:f:hn:s:t:");
 
 %charsets = (
     0 => 1252,      # ansi - Western European
@@ -50,24 +54,16 @@ getopts("bc:e:f:n:s:t:");
     255 => 'oem'
     );
 
+if ($opt_h)
+{
+    pod2usage( -verbose => 2);
+    exit;
+}
+
 unless (defined $ARGV[0])
 {
-    die <<'EOT';
-    sh2sh -s settings_dir [-c codepage] [-e encs] infile [outfile]
-
-Converts Shoebox data to Shoebox converting to Unicode as it goes.
-
-    -b              Delete empty fields
-    -c codepage     Set default codepage conversion, otherwise none
-    -e enc,enc      Add Encoding:: subsets in Perl 5.8.1
-    -f type         Force database type
-    -n normalform   normalize unicode text to D,C,KD,KC form
-    -s dir          Directory to find .typ files in [.]
-    -t type         Generate Toolbox database of given type
-    
-If outfile is missing, it is created as the input file with extension replaced
-by .db1. This allows a user to drop a data file on a shortcut.
-EOT
+    pod2usage(1);
+    exit;
 }
 
 unless (defined $ARGV[1])
@@ -94,7 +90,7 @@ open(OUTFILE, ">$ARGV[1]") || die "Can't create $ARGV[1]";
 # binmode(OUTFILE, ":utf8");
 select OUTFILE;
 
-$typef = $settings->type($s->{' Type'}) || die "Can't find .typ file for type: $s->{' Type'}";
+$typef = $settings->type($opt_f || $s->{' Type'}) || die "Can't find .typ file for type: $s->{' Type'}";
 $typef->read;
 $s->{' key'} = $typef->{'mkrRecord'}[0] || $typef->{'mkrRecord'};        # bug in .typ file results in mkrRecord going in twice
 $lngdef = $settings->lang($typef->{'lngDefault'});
@@ -116,7 +112,6 @@ $deflng ||= '1252';
 $defenc = Encode::Registry::find_encoding($deflng) || Encode::Registry::find_encoding('iso-8859-1')
     || die "Can't make an encoding converter for $deflng";
 
-$type = $settings->type($opt_f) || die "Can't find .typ file for $opt_f" if ($opt_f);
 $i = 0;
 foreach $x (@{$typef->{'intprc'}})
 {
@@ -133,6 +128,7 @@ foreach $x (@{$typef->{'intprc'}})
 }
 $lastrow = $i - 1;
 
+$opt_t =~ s/%T/$s->{' Type'}/og;
 $opt_t ||= $s->{' Type'} if ($opt_n);
 
 if ($opt_t)
@@ -204,7 +200,7 @@ sub convert
     elsif (defined $lang->{'encoding'})
     { $enc = $lang->{'encoding'}; }
     elsif (defined $lang->{'UnicodeLang'})
-    { undef $enc; }
+    { $enc = find_encoding("UTF-8"); }		# be strict UTF-8
     else
     {
         my ($cp);
@@ -234,6 +230,7 @@ sub convert
         $lang->{'encoding'} = $enc;
     }
     $str = $enc->decode($str) if ($enc);
+	$str = normalize($opt_n, $str) if ($opt_n);
     $str;
 }
     
@@ -536,3 +533,150 @@ sub le
     { return 1 if ($p eq $against); }
     return 0;
 }
+
+__END__
+
+=head1 TITLE
+
+sh2sh - convert Shoebox data to Unicode
+
+=head1 SYNOPSIS
+
+    sh2sh -s settings_dir [-c codepage] [-e encs] infile [outfile]
+
+Converts Shoebox data to Shoebox converting to Unicode as it goes.
+
+=head1 OPTIONS
+
+    -b              Delete empty fields
+    -c codepage     Set default codepage conversion, otherwise none
+    -e enc,enc      Add Encoding:: subsets in Perl 5.8.1
+    -f type         Force database type
+    -n normalform   normalize unicode text to D,C,KD,KC form
+    -s dir          Directory to find .typ files in [.]
+    -t type         Generate Toolbox database of given type
+    
+If outfile is missing, it is created as the input file with extension replaced
+by .db1. This allows a user to drop a data file on a shortcut.
+
+=head1 DESCRIPTION
+
+sh2sh converts a Shoebox (or Toolbox) database to Unicode. In particular it
+
+=over 4
+
+=item *
+
+Sonverts strings according to whcih field they are in and the corresponding
+language
+
+=item *
+
+Lays out interlinear text so that it remains as interlinear text when the
+corresponding underlying strings have changed length.
+
+=back
+
+Using sh2sh involves two aspects: preparing for conversion in terms of giving
+information about encoding conversion; and running the program, knowing what
+command line option does what.
+
+=head2 Running sh2sh
+
+Here we list the various command line options and give further details on each
+
+=over 4
+
+=item -b
+
+Any empty fields in the input file will be deleted.
+
+=item -c
+
+Specifies the default codepage to be used when converting data. In effect it
+specifies that sh2sh should act as though it were running on a system with the
+given default codepage. This means that data in languages with no given encoding
+conversion will be converted using this codepage.
+
+=item -e
+
+Perl has internal support for a large number of industry standard encodings. This
+option specifies which sets to pull in apart from the default set. Values include
+
+  Byte - standard ISO 8859 type single byte encodings
+  CN   - Continental China encodings including cp 936, GB 12345 and GB 2312
+  JP   - Japanese encodings including cp 932 and ISO 2022
+  KR   - Korean encodings including cp 949
+  TW   - Taiwanese encodings including cp 950
+  HanExtra - more Chinese encodings including GB 18030
+  JIS2K - More Japanese encodings
+  Ebcdic - surely not!
+  Symbols - various symbol encodings
+
+See man Encode::Supported or the corresponding module documentation for details of
+what is supported on your Perl installation.
+
+=item -f
+
+Rather than analysing the data in the file using the database type specified in
+the database, it is possible to specify that a different one should be used.
+
+=item -n
+
+Particularly with respect to Roman script languages involving letters with
+diacritics, there are two options as to how these are to be stored. They can
+either be stored as a single code (if such exists in Unicode) in which case
+the form to be asked for is C (composed), otherwise they can be stored using
+separate codes for base and diacritic and the normal form is D (decomposed).
+There are other normal forms which should only be used if you really know
+what you are doing (and then you will know why they shouldn't be used).
+
+=item -s
+
+sh2xml requires access to information about the structure of the database
+and language information. This is held in files in the same directory as the
+C<.prj> project file used when running Shoebox/Toolbox.
+
+=item -t
+
+Gives the name of a database type that is given to the output file. Since the
+encoding has changed, the old database type is no longer appropriate for the
+output data. If a new database type has already been created that makes reference
+to the appropriate languages based on Unicode. In order to access the old
+database type name as part of the new name, all occurrences of the string C<%T>
+in the C<-t> option will be replaced with the old database type name.
+
+=back
+
+=head2 Preparing for Conversion
+
+The basic need is to be able to specify how to convert text in a particular
+language into Unicode. This can be done by specifying a conversion mapping
+in each language file. Shoebox and Toolbox do not have a UI for specifying
+such conversion information, so we add information to the options/description
+field. The codepage specification takes the form:
+
+  \codepage = value
+
+The specification needs to be on a line on its own. The I<value> can take a
+number of forms.
+
+=over 4
+
+=item I<name>
+
+A mapping name either from the set of names supported by the Perl Encode
+module, or specified in an SIL Converters repository.
+
+=item I<filename>.tec
+
+The path and filename of a TECkit binary mapping file. The path is
+relative to the settings directory.
+
+=item none
+
+No mapping should be done. The data is assumed to be in UTF-8 encoding.
+
+=back
+
+=cut

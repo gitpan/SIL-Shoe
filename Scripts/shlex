@@ -5,19 +5,26 @@ use SIL::Shoe::Sort::unicode;
 use SIL::Shoe::Sort::default;
 use SIL::Shoe::Sort::shoe;
 use SIL::Shoe::Sort::numeric;
-use Getopt::Std;
+#use Getopt::Std;
+use Getopt::Long;
 use XML::Parser;
 use SIL::Shoe::Backend::html;
 use SIL::Shoe::Backend::openoffice;
 use Pod::Usage;
 
-$VERSION="0.6.1";   # MJPH      26-JUN-2006     Fix indexing
+$VERSION="0.8";     # MJPH       9-APR-2007     Add <picture>
+# $VERSION="0.7.1"    # MJPH         MAR-2007     Add <inline-map> tighten semantics 
+# $VERSION="0.7";     # MJPH      11-DEC-2006     Add <map> and <foreach> and $var
+# $VERSION="0.6.1";   # MJPH      26-JUN-2006     Fix indexing
 # $VERSION="0.6";     # MJPH      21-JUN-2006     Add unique attribute
 # $VERSION="0.5";     # MJPH      12-JUN-2006     Bottom to top rewrite with full nodes
 # $VERSION="0.2";     #   MJPH    10-JUN-2006     Fix sorting
 # $VERSION="0.1";     #   MJPH    25-MAY-2006     Original
 
-getopts('b:c:dhno:s:');
+#getopts('b:c:dhno:s:');
+GetOptions('b=s', 'c=s', 'd', 'h', 'n', 'o=s', 's=s', 'v=s%');
+
+my %inheritable = map {$_ => 1} qw(inline-map);
 
 unless ((defined $ARGV[0] && defined $opt_c) || defined $opt_h)
 {
@@ -27,8 +34,10 @@ unless ((defined $ARGV[0] && defined $opt_c) || defined $opt_h)
 
 if ($opt_h)
 {
-    pod2usage( -verbose => 2);
-    pod2usage( -verbose => 2, -inputfile => "SIL/Shoe/Backend/$opt_b.pm", -pathlist => \@INC) if ($opt_b);
+    if ($opt_b)
+    { pod2usage( -verbose => 2, -input => "SIL/Shoe/Backend/$opt_b.pm", -pathlist => \@INC); }
+    else
+    { pod2usage( -verbose => 2); }
     exit;
 }
 
@@ -39,7 +48,9 @@ my (%world);
 $xml = XML::Parser->new(Handlers => {Start => sub {
         my ($xml, $tag, %attrs) = @_;
         
-        if ($tag eq 'backend')
+        if ($tag eq 'layout')
+        { }
+        elsif ($tag eq 'backend')
         {
             $currback = $attrs{'type'};
         }
@@ -58,6 +69,25 @@ $xml = XML::Parser->new(Handlers => {Start => sub {
             }
             $curr = undef;
         }
+        elsif ($tag eq "map")
+        {
+            $curr = SIL::dict::parser::map->new(\%world, %attrs);
+            $world{'maps'}{$attrs{'name'}} = $curr;
+        }
+        elsif ($tag eq 'replace')
+        {
+            $xml->xpcroak("<replace> found not under parent <map>") unless ($curr);
+            $curr->add_replacement(%attrs);
+        }
+        elsif ($tag eq 'inline-map')
+        {
+            $curr = SIL::dict::parser::inline_map->new(\%world, %attrs);
+            $world{'inline-maps'}{$attrs{'name'}} = $curr;
+        }
+        elsif ($tag eq 'inline-style')
+        {
+            $curr->add_style(%attrs);
+        }
         elsif ($tag eq "letter")
         {
             $curr = SIL::dict::parser::letter->new(\%world, %attrs);
@@ -65,7 +95,7 @@ $xml = XML::Parser->new(Handlers => {Start => sub {
         }
         elsif ($tag eq "group")
         {
-            $next = SIL::dict::parser::group->new($curr, \%world, %attrs);
+            $next = SIL::dict::parser::group->new($curr, \%world, \%inheritable, $currlayout, %attrs);
             if ($curr)
             { $curr->add($next); }
             else
@@ -74,43 +104,65 @@ $xml = XML::Parser->new(Handlers => {Start => sub {
         }
         elsif ($tag eq 'switch')
         {
-            my ($next) = SIL::dict::parser::switch->new($curr, \%world, %attrs);
+            my ($next) = SIL::dict::parser::switch->new($curr, \%world, \%inheritable, %attrs);
+            $xml->xpcroak("<switch> needs parent, e.g. <group>") unless ($curr);
             $curr->add($next);
             $curr = $next;
         }
         elsif ($tag eq 'marker')
         {
-            my ($next) = SIL::dict::parser::marker->new($curr, \%world, %attrs);
+            my ($next) = SIL::dict::parser::marker->new($curr, \%world, \%inheritable, %attrs);
+            $xml->xpcroak("<marker> needs parent, e.g. <group>") unless ($curr);
             $curr->add($next);
             $curr = $next;
         }
         elsif ($tag eq 'use-group')
         {
-            my ($next) = SIL::dict::parser::use->new($curr, \%world, $currlayout, %attrs);
+            my ($next) = SIL::dict::parser::use->new($curr, \%world, \%inheritable, $currlayout, %attrs);
+            $xml->xpcroak("<use-group> needs parent, e.g. <group>") unless ($curr);
+            $curr->add($next);
+            $curr = $next;
+        }
+        elsif ($tag eq 'foreach')
+        {
+            my ($next) = SIL::dict::parser::foreach->new($curr, \%world, \%inheritable, %attrs);
+            $xml->xpcroak("<foreach> needs parent, e.g. <group>") unless ($curr);
             $curr->add($next);
             $curr = $next;
         }
         elsif ($tag eq 'output')
         {
-            my ($next) = SIL::dict::parser::output->new($curr, \%world, %attrs);
+            my ($next) = SIL::dict::parser::output->new($curr, \%world, \%inheritable, %attrs);
+            $xml->xpcroak("<output> needs parent, e.g. <group>") unless ($curr);
             $curr->add($next);
             $curr = $next;
         }
         elsif ($tag eq 'index')
         {
-            my ($next) = SIL::dict::parser::index->new($curr, \%world, %attrs);
+            my ($next) = SIL::dict::parser::index->new($curr, \%world, \%inheritable, %attrs);
             $world{'indices'}{$attrs{'name'}} = $next;
             $curr = $next;
         }
         elsif ($tag eq 'debug')
         {
-            my ($next) = SIL::dict::parser::debug->new($curr, \%world, %attrs);
+            my ($next) = SIL::dict::parser::debug->new($curr, \%world, \%inheritable, %attrs);
+            $xml->xpcroak("<debug> needs parent, e.g. <group>") unless ($curr);
             $curr->add($next);
             $curr = $next;
         }
+        elsif ($tag eq 'picture')
+        {
+            my ($next) = SIL::dict::parser::picture->new($curr, \%world, \%inheritable, %attrs);
+            $xml->xpcroak("<picture> needs parent, e.g. <marker>") unless ($curr);
+            $curr->add($next);
+            $curr = $next;
+        }
+        else
+        { $xml->xpcroak("Unknown marker $tag"); }
         }, End => sub {
         my ($xml, $tag) = @_;
         
+        return if ($tag eq 'replace' || $tag eq 'inline-style');
         $curr = $curr->parent if ($curr);
         }});
 
@@ -141,7 +193,7 @@ foreach $index (values %{$world{'indices'}})
 foreach $index (keys %ind_fn)
 {
     my ($mydb);
-    $mydb = SIL::dict::parser::Shoebox->make_indices($index || $ARGV[0], 
+    $mydb = SIL::dict::parser::Shoebox->make_indices($index || $ARGV[0],
             map {[$_->get_keys]} @{$ind_fn{$index}});
     foreach (@{$ind_fn{$index}})
     { $_->{'db'} = $mydb; }
@@ -159,6 +211,7 @@ foreach $lay (@{$world{'layoutlist'}})
         $nodeset->{'nodes'}[0][4]{'.old'}[0] = $oldkey;
         $nodeset->{'nodes'}[0][4]{'.new'}[0] = $key;
         $oldkey = $key;
+        $nodeset->{'vars'} = $opt_v;
 
         if (defined $lay->{'letters'}{'primary'})
         { $lay->{'letters'}{'primary'}->execute($nodeset, $backend); }
@@ -224,6 +277,7 @@ package SIL::dict::parser::nodeset;
 #            last field + 1, %data an array for each field]
 #   pos    - position of this nodeset in its parent (only in marker elements)
 #            value is propagated except through index lookups
+#   vars   - variables for looking up
 sub new
 {
     my ($class, @nodes) = @_;
@@ -231,6 +285,12 @@ sub new
     return bless $self, $class;
 }
 
+# elements in a node
+#   0 - node index in set
+#   1 - first field index
+#   2 - last field index
+#   3 - value of identifying attribute
+#   4 - field values as arrays
 sub append_node
 {
     my ($self, @node) = @_;
@@ -296,8 +356,10 @@ sub make_nodeset
             my (@list);
             foreach $k (split(' ', $info->{'keys'}))
             {
+                next unless (@{$n->[4]{$k}});
                 foreach $v (@{$n->[4]{$k}})
                 {
+                    next unless ($v ne '' || $info->{'empty'});
                     if (scalar @list)
                     { foreach (@list) { push (@{$_}, $v); } }
                     else
@@ -330,17 +392,23 @@ sub make_nodeset
                 my ($s) = $self->{'fields'}[$n->[0]][$i];
                 my ($v) = $self->{'dbs'}[$n->[0]]{$s};
                 $s =~ s/\s.*$//o;
-                if ($s eq $info->{'tag'})
+                if ($s eq $info->{'tag'} || !$info->{'tag'})
                 {
                     if ($newn)
                     {
                         $newn->[2] = $i;
                         $newn->[3] = join("\000", @sortkey);
                         push (@{$res->{'nodes'}}, $newn);
+                        undef $newn;
                     }
-                    $newn = [$n->[0], $i];
-                    @sortkey = ();
+                    if ($v ne '' || $info->{'empty'} || defined $info->{'keys'})
+                    {
+                        $newn = [$n->[0], $i];
+                        @sortkey = ();
+                    }
                 }
+				elsif (defined $info->{'limit'} && $info->{'limit'} =~ m/(?:^|\s)$s(?:\s|$)/)
+				{ last; }
                 if (defined $newn)
                 {
                     push (@{$newn->[4]{$s}}, $v);
@@ -372,6 +440,16 @@ sub make_nodeset
     }
     return $res;
 }
+
+sub expand
+{
+    my ($self, $str) = @_;
+
+    $str =~ s/\$\{([^}]+)\}/$self->{'vars'}{$1}/oge;
+    $str =~ s/\$(\S+)/$self->{'vars'}{$1}/oge;
+    $str;
+}
+
 # returns (value, node, nodeset)
 sub get_nodes
 {
@@ -452,6 +530,11 @@ sub position
     return $ls->{'pos'};
 }
 
+sub var
+{
+    return $nset->{'vars'}{$_[0]};
+}
+
 sub firstchar
 {
     my ($str, $sort, $level) = @_;
@@ -511,8 +594,18 @@ package SIL::dict::parser::group;
 
 sub new
 {
-    my ($class, $parent, $world, %attrs) = @_;
+    my ($class, $parent, $world, $inheritable, $currlayout, %attrs) = @_;
     my ($self) = {parent => $parent, world => $world, %attrs};
+    if ($parent)
+    {
+        foreach (keys %$inheritable)
+        { $self->{$_} = $parent->{$_} unless (defined $self->{$_}); }
+    }
+    else
+    {
+        foreach (keys %$inheritable)
+        { $self->{$_} = $currlayout->{$_} unless (defined $self->{$_}); }
+    }
     return bless $self, $class;
 }
 
@@ -534,25 +627,26 @@ sub execute
     my ($self, $parent, $backend, %opts) = @_;
     my ($jobs) = $parent->make_nodeset($self);
     my ($res);
-    
+
+    return $self->{'neg'} unless (scalar @{$jobs->{'nodes'}});
     if (defined $self->{'paragraph'})
-    { $backend->new_para($self->{'paragraph'}); }
+    { $backend->new_para($jobs->expand($self->{'paragraph'})); }
 
     if (defined $self->{'before'})
-    { $backend->output($self->{'before'}); }
+    { $backend->output($jobs->expand($self->{'before'})); }
     elsif ($opts{count} > 0 && defined $self->{'between'})
     { $backend->output($self->{'between'}); }
     
     if (defined $self->{'style'} && $self->{'style'} eq '')
     { $backend->output($jobs->{'nodes'}[0][3]); }
     elsif (defined $self->{'style'} && $self->{'style'})        # don't accidentally define it
-    { $backend->char_style($self->{'style'}, $jobs->{'nodes'}[0][3]); }
+    { $backend->char_style($jobs->expand($self->{'style'}), $jobs->{'nodes'}[0][3]); }
             
     foreach $c (@{$self->{'children'}})
     { $res |= $c->execute($jobs, $backend, %opts); }
 
     if (defined $self->{'after'})
-    { $backend->output($self->{'after'}); }
+    { $backend->output($jobs->expand($self->{'after'})); }
     return ($self->{'neg'} ? !$res : $res);
 }
 
@@ -562,8 +656,14 @@ use base 'SIL::dict::parser::group';
 
 sub new
 {
-    my ($class, $parent, $world, %attrs) = @_;
+    my ($class, $parent, $world, $inheritable, %attrs) = @_;
     my ($self) = {parent => $parent, world => $world, %attrs};
+
+    if ($parent)
+    {
+        foreach (keys %$inheritable)
+        { $self->{$_} = $parent->{$_} unless (defined $self->{$_}); }
+    }
     return bless $self, $class;
 }
 
@@ -572,8 +672,11 @@ sub execute
     my ($self, $parent, $backend, %opts) = @_;
     my ($jobs) = $parent->make_nodeset($self);
     
-    foreach $c (@{$self->{'children'}})
-    { return 1 if ($c->execute($jobs, $backend, %opts)); }
+    if (scalar @{$jobs->{'nodes'}})
+    {
+        foreach $c (@{$self->{'children'}})
+        { return 1 if ($c->execute($jobs, $backend, %opts)); }
+    }
     return 0;
 }
 
@@ -583,8 +686,14 @@ use base 'SIL::dict::parser::group';
 
 sub new
 {
-    my ($class, $parent, $world, %attrs) = @_;
+    my ($class, $parent, $world, $inheritable, %attrs) = @_;
     my ($self) = {parent => $parent, world => $world, %attrs};
+
+    if ($parent)
+    {
+        foreach (keys %$inheritable)
+        { $self->{$_} = $parent->{$_} unless (defined $self->{$_}); }
+    }
     return bless $self, $class;
 }
 
@@ -595,39 +704,50 @@ sub execute
     my ($localjob) = bless {%{$jobs}}, ref $jobs;
     my ($i, $res, $c);
 
+    return $self->{'neg'} unless (@{$jobs->{'nodes'}});
+
+    my ($indent) = $jobs->expand($self->{'indent'});
+    if ($indent eq 'tab')
+    { $backend->output_tab; }
+    elsif ($indent eq 'newline')
+    { $backend->output_newline; }
+    elsif ($indent eq 'none' || $indent eq '' && !defined $self->{'style'})
+    { }
+    else
+    { $backend->output_space; }
+
+    if (defined $self->{'before'})
+    { $backend->output($jobs->expand($self->{'before'})); }
+
     for ($i = 0; $i < scalar @{$jobs->{'nodes'}}; $i++)
     {
         my ($j) = $jobs->{'nodes'}[$i];
+
         $localjob->{'nodes'} = [$j];
         $localjob->{'pos'} = $i;
         $res = 1;
         if (defined $self->{'paragraph'})
-        { $backend->new_para($self->{'paragraph'}); }
+        { $backend->new_para($jobs->expand($self->{'paragraph'})); }
         
         if ($i > 0 && defined $self->{'between'})
-        { $backend->output($self->{'between'}); }
-        
-        if ($self->{'indent'} eq 'tab')
-        { $backend->output_tab; }
-        elsif ($self->{'indent'} eq 'none' || $self->{'indent'} eq '' && !defined $self->{'style'})
-        { }
-        else
-        { $backend->output_space; }
+        { $backend->output($jobs->expand($self->{'between'})); }
             
-        if (defined $self->{'before'})
-        { $backend->output($self->{'before'}); }
-            
-        if (defined $self->{'style'} && $self->{'style'} eq '')
-        { $backend->output($j->[3]); }
-        elsif (defined $self->{'style'} && $self->{'style'})
-        { $backend->char_style($self->{'style'}, $j->[3]); }
+        if (defined $self->{'style'} && defined $self->{'inline-map'})
+        {
+            my ($map) = $self->{'world'}{'inline-maps'}{$jobs->expand($self->{'inline-map'})};
+            $map->output($j->[3], $jobs->expand($self->{'style'}), $backend, $jobs, %opts);
+        }
+        elsif (defined $self->{'style'})
+        { $backend->char_style($jobs->expand($self->{'style'}), $j->[3]); }
             
         foreach $c (@{$self->{'children'}})
         { $c->execute($localjob, $backend, %opts); }
             
-        if (defined $self->{'after'})
-        { $backend->output($self->{'after'}); }
     }
+
+    if (defined $self->{'after'})
+    { $backend->output($jobs->expand($self->{'after'})); }
+
     return ($self->{'neg'} ? !$res : $res);
 }
 
@@ -637,8 +757,14 @@ use base 'SIL::dict::parser::group';
 
 sub new
 {
-    my ($class, $parent, $world, $currlayout, %attrs) = @_;
+    my ($class, $parent, $world, $inheritable, $currlayout, %attrs) = @_;
     my ($self) = {parent => $parent, world => $world, layout => $currlayout, %attrs};
+
+    if ($parent)
+    {
+        foreach (keys %$inheritable)
+        { $self->{$_} = $parent->{$_} unless (defined $self->{$_}); }
+    }
     return bless $self, $class;
 }
 
@@ -648,8 +774,44 @@ sub execute
     my ($jobs) = $parent->make_nodeset($self);
     my ($res);
 
+    return 0 unless (scalar @{$jobs->{'nodes'}});
     return $self->{'layout'}{'groups'}{$self->{'name'}}->execute($jobs, $backend, %opts) if (defined $self->{'layout'}{'groups'}{$self->{'name'}});
     return 0;
+}
+
+package SIL::dict::parser::foreach;
+
+use base 'SIL::dict::parser::group';
+
+sub new
+{
+    my ($class, $parent, $world, $inheritable, %attrs) = @_;
+    my ($self) = {parent => $parent, world => $world, %attrs};
+
+    if ($parent)
+    {
+        foreach (keys %$inheritable)
+        { $self->{$_} = $parent->{$_} unless (defined $self->{$_}); }
+    }
+    return bless $self, $class;
+}
+
+sub execute
+{
+    my ($self, $parent, $backend, %opts) = @_;
+    my (@vars) = split(' ', $self->{'over'});
+    my ($jobs, $v, $c);
+
+    foreach $v (@vars)
+    {
+        $jobs = bless {%$parent}, SIL::dict::parser::nodeset;
+        $jobs->{'vars'} = {%{$jobs->{'vars'}}};      # copy contents so don't pollute parent
+        $jobs->{'vars'}{$self->{'var'}} = $v;
+
+        foreach $c (@{$self->{'children'}})
+        { $res |= $c->execute($jobs, $backend, %opts); }
+    }
+    return $res;
 }
 
 package SIL::dict::parser::output;
@@ -658,8 +820,14 @@ use base 'SIL::dict::parser::group';
 
 sub new
 {
-    my ($class, $parent, $world, %attrs) = @_;
+    my ($class, $parent, $world, $inheritable, %attrs) = @_;
     my ($self) = {parent => $parent, world => $world, %attrs};
+
+    if ($parent)
+    {
+        foreach (keys %$inheritable)
+        { $self->{$_} = $parent->{$_} unless (defined $self->{$_}); }
+    }
     return bless $self, $class;
 }
 
@@ -672,33 +840,36 @@ sub execute
     { return 0; }
 
     if (defined $self->{'text'})
-    { $text = $self->{'text'}; }
+    { $text = $parent->expand($self->{'text'}); }
     elsif (defined $self->{'value'})
     { $text = eval "\$SIL::dict::parser::nodeset::nset = \$parent; \$SIL::dict::parser::nodeset::node = \$parent->{'nodes'}[0]; package SIL::dict::parser::nodeset; $self->{'value'}"; }
 
     if (defined $self->{'paragraph'})
-    { $backend->new_para($self->{'paragraph'}); }
+    { $backend->new_para($parent->expand($self->{'paragraph'})); }
 
     if ($opts{'count'} > 0 && defined $self->{'between'})
-    { $backend->output($self->{'between'}); }
+    { $backend->output($parent->expand($self->{'between'})); }
 
-    if ($self->{'indent'} eq 'tab')
+    my ($indent) = $parent->expand($self->{'indent'});
+    if ($indent eq 'tab')
     { $backend->output_tab; }
-    elsif ($self->{'indent'} eq 'none')
+    elsif ($indent eq 'newline')
+    { $backend->output_newline; }
+    elsif ($indent eq 'none')
     { }
     else
     { $backend->output_space; }
 
     if (defined $self->{'before'})
-    { $backend->output($self->{'before'}); }
+    { $backend->output($parent->expand($self->{'before'})); }
 
     if (defined $self->{'style'} && $self->{'style'})
-    { $backend->char_style($self->{'style'}, $text); }
+    { $backend->char_style($parent->expand($self->{'style'}), $text); }
     elsif ($text)
     { $backend->output($text); }
 
     if (defined $self->{'after'})
-    { $backend->output($self->{'after'}); }
+    { $backend->output($parent->expand($self->{'after'})); }
     return 1;
 }
 
@@ -708,8 +879,14 @@ use base 'SIL::dict::parser::output';
 
 sub new
 {
-    my ($class, $parent, $world, %attrs) = @_;
+    my ($class, $parent, $world, $inheritable, %attrs) = @_;
     my ($self) = {parent => $parent, world => $world, %attrs};
+
+    if ($parent)
+    {
+        foreach (keys %$inheritable)
+        { $self->{$_} = $parent->{$_} unless (defined $self->{$_}); }
+    }
     return bless $self, $class;
 }
 
@@ -724,7 +901,7 @@ sub execute
     { return 0; }
 
     if (defined $self->{'text'})
-    { $text = $self->{'text'}; }
+    { $text = $parent->expand($self->{'text'}); }
     elsif (defined $self->{'value'})
     { $text = eval "\$SIL::dict::parser::nodeset::nset = \$parent; \$SIL::dict::parser::nodeset::node = \$parent->{'nodes'}[0]; package SIL::dict::parser::nodeset; $self->{'value'}"; }
 
@@ -733,6 +910,103 @@ sub execute
     return 0;
 }
 
+package SIL::dict::parser::picture;
+
+use base 'SIL::dict::parser::group';
+
+sub new
+{
+    my ($class, $parent, $world, $inheritable, %attrs) = @_;
+    my ($self) = {parent => $parent, world => $world, %attrs};
+
+    if ($parent)
+    {
+        foreach (keys %$inheritable)
+        { $self->{$_} = $parent->{$_} unless (defined $self->{$_}); }
+    }
+    return bless $self, $class;
+}
+
+sub execute
+{
+    my ($self, $parent, $backend, %opts) = @_;
+    my ($jobs) = $parent->make_nodeset($self);
+    my ($res) = 1;
+
+    return $self->{'neg'} unless (@{$jobs->{'nodes'}});
+
+    foreach my $j (@{$jobs->{'nodes'}})
+    {
+        my ($fname) = $jobs->expand($self->{'path'}).$j->[3];
+        if (-f $fname)
+        { $backend->picture($jobs->expand($self->{'style'}), $fname, $jobs->expand($self->{'scale'}) || 1); }
+        else
+        {
+            print STDERR "WARNING: Picture file $fname not found\n";
+            $res = 0;
+        }
+    }
+    return $self->{'neg'} ? !$res : $res;
+}
+
+
+package SIL::dict::parser::map;
+
+sub new
+{
+    my ($class, $world, %attrs) = @_;
+    my ($self) = {world => $world, %attrs};
+    return bless $self, $class;
+}
+
+sub parent
+{ return undef; }
+
+sub add_replacement
+{
+    my ($self, %attrs) = @_;
+    $self->{'maps'}{$attrs{'in'}} = $attrs{'out'};
+}
+
+package SIL::dict::parser::inline_map;
+
+sub new
+{
+    my ($class, $world, %attrs) = @_;
+    my ($self) = {world => $world, %attrs};
+    return bless $self, $class;
+}
+
+sub parent
+{ return undef; }
+
+sub add_style
+{
+    my ($self, %attrs) = @_;
+
+    $self->{'styles'}{$attrs{'begin'}} = {%attrs};
+}
+
+sub output
+{
+    my ($self, $text, $style, $backend, $parent, %opts) = @_;
+    my ($match) = join("|", map {my ($m) = $_; $m =~ s/([[\]*$.?|()])/\\$1/og; "($m)(.*?)(?:$self->{'styles'}{$_}{'end'})"} keys %{$self->{'styles'}});
+
+    while ($text =~ m/\G(.*?)(?:$match|$)/g)
+    {
+        if ($1)
+        { $backend->char_style($style, $1); }
+
+        for ($i = 2; $i < $#-; $i += 2)
+        {
+            next if ($-[$i] == $+[$i]);
+            my ($begin) = substr($text, $-[$i], $+[$i] - $-[$i]);
+            my ($val) = substr($text, $-[$i+1], $+[$i+1] - $-[$i+1]);
+            my ($mstyle) = $parent->expand($self->{'styles'}{$begin}{'style'});
+            $backend->char_style($mstyle, $val);
+        }
+    }
+}
 
 package SIL::dict::parser::letter;
 
@@ -771,18 +1045,18 @@ sub execute
         $backend->start_letter();
 
         if (defined $self->{'text'})
-        { $text = $self->{'text'}; }
+        { $text = $nodes->expand($self->{'text'}); }
         elsif (defined $self->{'value'})
         { $text = eval "\$SIL::dict::parser::nodeset::nset = \$nodes; \$SIL::dict::parser::nodeset::node = \$nodes->{'nodes'}[0]; package SIL::dict::parser::nodeset; $self->{'value'}"; }
 
         if (defined $self->{'paragraph'})
-        { $backend->new_para($self->{'paragraph'}); }
+        { $backend->new_para($nodes->expand($self->{'paragraph'})); }
         
         if (defined $self->{'before'})
-        { $backend->output($self->{'before'}); }
+        { $backend->output($nodes->expand($self->{'before'})); }
 
         if (defined $self->{'style'} && $self->{'style'})
-        { $backend->char_style($self->{'style'}, $text); }
+        { $backend->char_style($nodes->expand($self->{'style'}), $text); }
         elsif ($text)
         { $backend->output($text); }
 
@@ -790,7 +1064,7 @@ sub execute
         { $c->execute($nodes, $backend); }
 
         if (defined $self->{'after'})
-        { $backend->output($self->{'after'}); }
+        { $backend->output($nodes->expand($self->{'after'})); }
 
         $backend->end_letter();
         return 1;
@@ -801,8 +1075,14 @@ package SIL::dict::parser::index;
 
 sub new
 {
-    my ($class, $curr, $world, %attrs) = @_;
+    my ($class, $curr, $world, $inheritable, %attrs) = @_;
     my ($self) = {parent => $curr, world => $world, %attrs};
+
+    if ($parent)
+    {
+        foreach (keys %$inheritable)
+        { $self->{$_} = $parent->{$_} unless (defined $self->{$_}); }
+    }
     return bless $self, $class;
 }
 
@@ -849,9 +1129,11 @@ sub make_nodeset
     my ($nodecount, $k, $i, $f, $res);
 
     $nodeset->{'parent'} = $parent;
+    $nodeset->{'vars'} = $parent->{'vars'} if ($parent);
 
     foreach $k (@keys)
     {
+        next if (!$info->{'empty'} && $k eq '');
         my (@inds) = @{$self->{'db'}{'indices'}[$self->{'index_num'}]{$k}};
         if ($unique)
         {
@@ -866,10 +1148,13 @@ sub make_nodeset
             foreach $f (@$fields)
             {
                 my ($t) = $f;
+                my ($n) = $1 if ($t =~ s/\s(\d+)$//o);
                 my ($dat) = $self->{'db'}->getfield($f);
                 $keyval = $dat unless (defined $keyval);
+                $t = $self->{'world'}{'maps'}{$self->{'map'}}{'maps'}{$t}
+                        if (defined $self->{'map'} && defined $self->{'world'}{'maps'}{$self->{'map'}} && defined $self->{'world'}{'maps'}{$self->{'map'}}{$t});
+                $f = ($n ne '') ? "$t $n" : $t;
 
-                $t =~ s/\s*\d+$//o;
                 push (@{$data{$t}}, $dat);
                 $db{$f} = $dat;
             }
@@ -895,7 +1180,6 @@ sub new
     return bless $self, $class;
 }
 
-
 package SIL::dict::parser::Shoebox;
 
 use SIL::Shoe::Data;
@@ -903,12 +1187,14 @@ use SIL::Shoe::Data;
 sub make_indices
 {
     my ($class, $filename, @indices) = @_;
-    my ($db) = SIL::Shoe::Data->new($ARGV[0], undef, unicode => 1) || die "Can't open database $filename";
+    my ($db) = SIL::Shoe::Data->new($filename, undef, unicode => 1) || die "Can't open database $filename";
     my ($self) = {'db' => $db};
 
     foreach $i (@indices)       # this is the slow way for now
     {
+#        $attrs = shift(@{$i});
         $db->index(@{$i});
+#        delete $db->{' index'}{''} if ($attrs->{'noempty'});
         push (@{$self->{'indices'}}, $db->{' index'});
     }
     return bless $self, $class;
@@ -920,7 +1206,7 @@ sub readrecord
     my (@flist);
 
 #    return if (defined $offset && $self->{'db'}{' loc'} == $offset);
-    $self->{'db'}->readrecord(\@flist, $offset);
+    $self->{'db'}->readrecord(\@flist, $offset || 0);
     $self->{'db'}{' loc'} = $offset;
     return [@flist];
 }
@@ -955,6 +1241,7 @@ a given format.
   -n                Sort keys by line number of first occurrence (i.e. no sort)
   -o outfile        Where to store the output (or stdout)
   -s style_info     Backend specific configuration
+  -v var=val        Assign values
 
 =head1 DESCRIPTION
 
@@ -991,6 +1278,7 @@ returns true. This is useful for alternation.
 
 The nodeset that is passed can be filtered using the C<test> attribute. It can
 also be sorted on fields within each node. But this is true for any of the
+nodeset generating elements.
 
 The configuration file is an XML file that controls the typesetting of each
 dictionary entry. The language consist of 4 key elements.
@@ -1026,13 +1314,18 @@ been passed, in which case it can filter it using the C<test> attribute and sort
 on any fields in each node (the last field occurring is used). It can make a set
 of subnodes by taking a marker in each node and assembling a nodeset for that node
 which is the field with that marker up to the next field with the same marker
-which starts a new subnodes. Finally all the subnodes from all the nodes in the
+which starts a new subnode. Finally all the subnodes from all the nodes in the
 set are joined into one big nodeset which again can be filtered and sorted.
 Finally, a nodeset may be assembled by looking up records against a particular
-set of fields in the incoming nodeset. Each node is search for the first occurrence
+set of fields in the incoming nodeset. Each node is searched for the first occurrence
 of each field in the C<keys> attribute and a search key is created. This is
 looked up in an index and the resulting nodes added to the output nodeset.
 The output nodeset can be filtered and sorted.
+
+=item picture
+
+Outputs a picture whose filename (relative or absolute) is given by the value of
+the node. One picture is output for each node in the nodeset.
 
 =item output
 
@@ -1044,6 +1337,20 @@ optional C<test> attribute is passed. Returns true if the test is passed.
 This is much like an output element but its output is sent to STDOUT for
 debugging purposes, when the option C<-d> is used on the command line.
 
+=item inline-map
+
+It is possible for some fields to contain style markup, for example:
+
+ \nt Rarely does |fv{fruble} interact with this word
+ 
+The inline-map element contains a list of such style markup elements
+and then can be applied to a particular field as it is output.
+
+=item inline-style
+
+This element occurs within an inline-map and maps a particular style
+markup to an output style.
+
 =back
 
 =head2 Indices
@@ -1052,7 +1359,7 @@ Indices are named globally regardless of where they are defined. Each section al
 creates an index with the name of the section prepended with an underscore C<_>.
 An index may be used to access other files than the input file. A section works
 by iterating over the keys in the index creating a nodeset from all the records
-that match that key. It then passes that nodeset to the first the C<letter>
+that match that key. It then passes that nodeset to the C<letter>
 element named C<primary> and then on to the C<group> element named C<main>.
 
 The C<letter> element is used to control the section headings used for character
@@ -1142,21 +1449,35 @@ Here we list all the key attributes and what they do and mean
 
 =item after
 
-The contents of this attribute are output after all each iteration over the
-nodeset. Thus for a C<group> it is output once, whereas for a C<marker> it
-is output after each node is processed by the C<marker>'s children.
+The contents of this attribute are output once after all iterations over the
+nodeset.
 
 =item before
 
-The contents of this attribute are output before each node is processed. Thus
-for a C<group> it is output once, whereas for a C<marker> it is output before
-each node is processed by the C<marker>'s children (and before any text is
-output using the C<style> attribute)
+The contents of this attribute are output once before the nodeset is processed.
+
+=item begin
+
+Occurs in an inline-style element and gives the identifying string that starts
+a run in this particular style.
 
 =item between
 
 This is output only before the C<before> and C<indent> attributes if this is
 not the first node being processed.
+
+=item empty
+
+By default if the contents of the field that defines the start of a node is empty
+then no node is generated, unless this attribute is non-zero. If an empty nodeset
+is being processed, then no action occurs. This is for skipping empty fields.
+
+=item end
+
+Occurs in an inline-style element and gives the identifying string that closes
+a run in this particular style. Runs may be nested and the end attribute does
+not have to be unique. The end attribute may not occur as an initial substring
+of any begin attribute in any inline-style in the parent inline-map.
 
 =item filename
 
@@ -1170,6 +1491,10 @@ Specifies how much indent to insert before any C<before> or output. No indent
 occurs at the beginning of a paragraph. Values supported are:
 
 =over 8
+
+=item newline
+
+Inserts a line break (not a paragraph break).
 
 =item none
 
@@ -1193,6 +1518,12 @@ behaviour for C<indent> becomes C<none>.
 Assembles the output nodeset by assembling lookup C<keys> from the input nodeset
 and then using these to create an output nodeset according to C<sort>.
 
+=item inline-map
+
+This attribute indicates that the given inline-map should be used to map style
+markup to character styles for any field data processed by this element. Notice
+that the inline-map attribute is inherited by all this elements children.
+
 =item keys
 
 Keys have two uses in shlex.
@@ -1204,10 +1535,23 @@ In a processing element it specifies the fields to use from the input nodeset wh
 constructing the value of a node. Node values are used for sorting the nodes in
 a nodeset. Note that only the first occurence of each field is used.
 
+=item limit
+
+If we consider a record might contain subrecords, a field may occur both in the
+record and the subrecords and it is difficult to not pick up the subrecord fields
+when processing the main record. This attribute allows a tag selection to stop
+collecting elements in a node when a particular marker is hit. The attribute is
+a space separated list of markers to stop processing at.
+
+=item map
+
+Used in conjunction with an index lookup. This specifies a conversion map to map
+from input markers to markers to be used inside shlex.
+
 =item name
 
 Used to name elements, for example groups and indexes, so that they can be
-referenced again in use-group elements for exaxmple.
+referenced again in use-group elements for example.
 
 =item neg
 
@@ -1221,6 +1565,20 @@ continue processing the other children, otherwise stop.
 
 Specifies that this element starts a new paragraph of the given style. Only one
 paragraph is started for one element.
+
+=item path
+
+This value is inserted before a picture filename to locate the actual picture
+file. A warning is given if the file is not found. Since the value is simply
+prepended onto the picture filename, a trailing / is required (or whatever is
+appropriate for your OS, note on Windows that / are easier to use).
+
+=item scale
+
+This gives a floating point multiplier for the size of an image inserted into
+the document from a picture element. The size of the image is taken as its
+pixel size in pts (i.e. presuming 72dpi). Use scale to linearly scale to account
+for a difference between this and what the real resolution is.
 
 =item sort
 
@@ -1239,7 +1597,8 @@ which case the text is output using the underlying paragraph style.
 =item tag
 
 Specifies a field marker to find within each node from which a new sub node is
-created.
+created. If C<tag> is defined, but empty, the match will occur on any field marker.
+This results in a nodeset consisting of nodes containing only one field.
 
 =item test
 
@@ -1304,11 +1663,21 @@ is used.
 
 A DTD for the configuration file is:
 
-  <!ELEMENT layout (backend*, section+)>
+  <!ELEMENT layout (backend*, map*, index*, inline-map* section+)>
 
   <!ELEMENT backend (property*)>
   <!ATTLIST backend
         type        CDATA #REQUIRED>
+        
+  <!ELEMENT inline-map (inline-style+)>
+  <!ATTLIST inline-map
+        name        CDATA #REQUIRED>
+        
+  <!ELEMENT inline-style>
+  <!ATTLIST inline-style
+        begin       CDATA #REQUIRED
+        end         CDATA #REQUIRED
+        style       CDATA #REQUIRED>
 
   <!ELEMENT property>
   <!ATTLIST property
@@ -1324,7 +1693,7 @@ A DTD for the configuration file is:
         unique      CDATA #IMPLIED
         test        CDATA #IMPLIED>
 
-  <!ELEMENT letter (output | group | marker | switch | use-group | debug)*>
+  <!ELEMENT letter (output | group | marker | switch | use-group | debug | foreach)*>
   <!ATTLIST letter
         name        CDATA #REQUIRED
         test        CDATA #REQUIRED
@@ -1335,7 +1704,7 @@ A DTD for the configuration file is:
         style       CDATA #IMPLIED
         after       CDATA #IMPLIED>
         
-  <!ELEMENT group (group | use-group | marker | switch | switch | debug)+>
+  <!ELEMENT group (group | use-group | marker | switch | switch | debug | foreach)+>
   <!ATTLIST group
         name        CDATA #REQUIRED
         paragraph   CDATA #IMPLIED
@@ -1348,6 +1717,7 @@ A DTD for the configuration file is:
         sort        CDATA #IMPLIED
         unique      CDATA #IMPLIED
         test        CDATA #IMPLIED
+        inline-map  CDATA #IMPLIED
         tag         CDATA #IMPLIED>
 
   <!ELEMENT use-group>
@@ -1359,9 +1729,10 @@ A DTD for the configuration file is:
         sort        CDATA #IMPLIED
         unique      CDATA #IMPLIED
         test        CDATA #IMPLIED
+        inline-map  CDATA #IMPLIED
         tag         CDATA #IMPLIED>
 
-  <!ELEMENT marker (use-group | marker | switch | group | output | debug)*>
+  <!ELEMENT marker (use-group | marker | switch | group | output | debug | foreach)*>
   <!ATTLIST marker
         tag         CDATA #REQUIRED
         test        CDATA #IMPLIED
@@ -1375,9 +1746,10 @@ A DTD for the configuration file is:
         keys        CDATA #IMPLIED
         sort        CDATA #IMPLIED
         unique      CDATA #IMPLIED
+        inline-map  CDATA #IMPLIED
         neg         CDATA #IMPLIED>
 
-  <!ELEMENT switch (switch | marker | group | output | debug | use-group)+>
+  <!ELEMENT switch (switch | marker | group | output | debug | use-group | foreach)+>
   <!ATTLIST switch
         tag         CDATA #REQUIRED
         test        CDATA #IMPLIED
@@ -1385,8 +1757,14 @@ A DTD for the configuration file is:
         keys        CDATA #IMPLIED
         sort        CDATA #IMPLIED
         unique      CDATA #IMPLIED
+        inline-map  CDATA #IMPLIED
         neg         CDATA #IMPLIED>
   
+  <!ATTLIST foreach (switch | marker | group | output | debug | use-group | foreach)+>
+  <!ATTLIST foreach
+        var         CDATA #REQUIRED
+        inline-map  CDATA #IMPLIED
+        over        CDATA #REQUIRED>
 
   <!ELEMENT index>
   <!ATTLIST index
@@ -1394,8 +1772,18 @@ A DTD for the configuration file is:
         name        CDATA #REQUIRED
         keys        CDATA #REQUIRED>
 
+  <!ELEMENT map (replace*)>
+  <!ATTLIST map
+        name        CDATA #REQUIRED>
+
+  <!ELEMENT replace>
+  <!ATTLIST replace
+        in          CDATA #REQUIRED
+        out         CDATA #REQUIRED>
+
   <!ELEMENT output>
   <!ATTLIST
+        style       CDATA #IMPLIED
         test        CDATA #IMPLIED
         text        CDATA #IMPLIED
         value       CDATA #IMPLIED
@@ -1403,6 +1791,7 @@ A DTD for the configuration file is:
         style       CDATA #IMPLIED
         before      CDATA #IMPLIED
         after       CDATA #IMPLIED
+        inline-map  CDATA #IMPLIED
         indent      CDATA #IMPLIED>
 
   <!ELEMENT debug>
@@ -1410,6 +1799,18 @@ A DTD for the configuration file is:
         test        CDATA #IMPLIED
         text        CDATA #IMPLIED
         value       CDATA #IMPLIED>
+  
+  <!ELEMENT picture>
+  <!ATTLIST
+        path        CDATA #IMPLIED
+        scale       CDATA #IMPLIED
+        tag         CDATA #IMPLIED
+        test        CDATA #IMPLIED
+        index       CDATA #IMPLIED
+        keys        CDATA #IMPLIED
+        sort        CDATA #IMPLIED
+        unique      CDATA #IMPLIED
+        neg         CDATA #IMPLIED>
         
 =head2 Limitations
 
@@ -1420,7 +1821,7 @@ Here are some things that this program won't do.
 =item .
 
 Add or change any fields in the database. If you need to munge your data before
-processing, e.g. splitting up fields. Then this should be done before running
+processing, e.g. splitting up fields, then this should be done before running
 shlex.
 
 =item .
@@ -1449,7 +1850,7 @@ The documentation is poor and rushed.
 
 =back
 
-=comment
+=begin comment
 
 Some thoughts on integrating XML based databases into this system.
 
@@ -1470,3 +1871,4 @@ attribute say.
 This all would require some major restructuring of the code to account for the
 fact that a tag test is simply an xpath lookup to get a nodeset and so on.
 
+=end comment

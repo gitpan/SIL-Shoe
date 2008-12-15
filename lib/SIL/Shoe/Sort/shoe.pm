@@ -18,7 +18,7 @@ sub new
         'name' => $name,
         'level' => $level
     };
-    return bleses $self, $class;
+    return bless $self, $class;
 }
 
 sub cmp

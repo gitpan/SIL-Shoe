@@ -221,7 +221,7 @@ sub index
     while ($_ = $file->getline)
     {
         $lcount++;
-        if (m/^\\$self->{' key'}\s+/o)
+        if (m/^\\$self->{' key'}\s+/)
         {
             if (defined @val)
             {
@@ -396,7 +396,7 @@ sub readrecord
     my ($file) = $self->{' INFILE'};
     my ($key) = $self->{' key'};
     my ($stripnl) = not $self->{' nostripnl'};
-    $loc ||= $self->{' thisloc'};
+    $loc = $self->{' thisloc'} unless (defined $loc);
     my ($foundkey) = 0;
     $loc = $self->{' loc'} if ($loc == -1);         # done a findrecord
 
@@ -554,7 +554,7 @@ sub allof
     my ($self, $key) = @_;
     my ($k) = qr/^$key(?:\s|$)/;
 
-    return map {$self->{$_}} sort grep {/$k/} keys %{$self};
+    return sort grep {/$k/} keys %{$self};
 }
 
 
@@ -660,27 +660,35 @@ set, then also add onto the end of the list, all unmentioned fields.
 =cut
 
 sub printrecord
-    {
+{
     my ($self, $file, @fields) = @_;
     my ($f);
 
     if ($self->{' allfields'})
+    {
+        if (defined $self->{' field_list'})
         {
-        foreach $f (keys %$self )   # for each field possible
-            {                       # add to the list if not alread there
-            push (@fields, $f) unless (grep($_ eq $f, @fields));
+            foreach $f (@{$self->{' field_list'}})
+            { push(@fields, $f) unless (grep($_ eq $f, @fields)); }
+        }
+        else
+        {
+            foreach $f (grep {m/^\S/o} keys %$self )   # for each field possible
+            {                           # add to the list if not alread there
+                push (@fields, $f) unless (grep($_ eq $f, @fields));
             }
         }
-    foreach $f (@fields)              # iterate over the marker list
-        {
-        if ($f =~ m/ /o)              # need to trim fieldname kludging
-            { print $file "\\$` "; }
-        else
-            { print $file "\\" ."$f "; }
-        print $file "$self->{$f}\n";
-        }
-    print $file "\n" unless $self->{' noblank'};  # print a blank line at the end of a record
     }
+    foreach $f (@fields)              # iterate over the marker list
+    {
+        if ($f =~ m/ /o)              # need to trim fieldname kludging
+        { print $file "\\$` "; }
+        else
+        { print $file "\\" ."$f "; }
+        print $file "$self->{$f}\n";
+    }
+    print $file "\n" unless $self->{' noblank'};  # print a blank line at the end of a record
+}
 
 
 =head2 $s->rewind([$pos])

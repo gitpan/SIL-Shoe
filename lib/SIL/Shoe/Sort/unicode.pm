@@ -7,9 +7,10 @@ sub new
 {
     my ($class, $name) = @_;
     my ($self);
-    my ($dump, $level) = split(/\|/, $name);
+    my ($dump, $level, $variable) = split(/\|/, $name);
     my ($srt) = Unicode::Collate->new(
-        'level' => $level || 4
+        'level' => $level || 4,
+        'variable' => $variable || 'shifted'
     ) || die "Can't create Unicode collator";
 
     $self = {
@@ -39,11 +40,13 @@ sub firstchar
     my ($self, $str, $level, $ignore) = @_;
 
     return undef unless ($str);
-    return ($self->{'coll'}->tokenize($str, $level, $ignore))[0];
+    return substr(($self->{'coll'}->tokenize($str, $level, $ignore))[0], 0, 1);
 }
 
 package Unicode::Collate;
 
+my (%token_rearrange) = map {$_ => 1} (0x0E40, 0x0E41, 0x0E42, 0x0E43, 0x0E44, 
+                                       0x0EC0, 0x0EC1, 0x0EC2, 0x0EC3, 0x0EC4);
 sub tokenize
 {
     my ($self, $str, $level, $ignore) = @_;
@@ -55,7 +58,11 @@ sub tokenize
     {
         my ($var, @wt) = (unpack('cn4', ($self->getWt($r))[0]));   # only interested in first key since primary one
         my ($test, $i);
-        my ($s) = pack('U*', split(/;/, $r));
+        # handle rearrangements
+        my (@r) = split(/;/, $r);
+        if ($token_rearrange{$r[0]})
+        { ($r[0], $r[1]) = ($r[1], $r[0]); }
+        my ($s) = pack('U*', @r);
 
         for ($i = 0; $i < $level - 1; $i++)
         { $test |= ($wt[$i] == 0); }

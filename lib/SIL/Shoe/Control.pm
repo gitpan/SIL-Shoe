@@ -159,8 +159,8 @@ sub parse
             }
         } elsif (!$inlines && defined $curr_mark)
         {
-            s/^\s+//oig;
-            $$curr_mark .= ($multiline ? "\n" : " ") if ($$curr_mark ne "");
+#            s/^\s+//oig;
+            $$curr_mark .= ($multiline || m/^\s\s/o ? "\n" : " ") if ($$curr_mark ne "");
             $$curr_mark .= $_;
         } elsif ($inlines)
         { push (@{$target}, $_); }
